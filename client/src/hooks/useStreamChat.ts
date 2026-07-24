@@ -46,8 +46,8 @@ export function useStreamChat(
 
   // 存储当前的AbortController引用
   const abortControllerRef = useRef<AbortController | null>(null);
-  // 存储当前流式消息的ID引用
-  const currentMessageIdRef = useRef<string | null>(null);
+  // 当前流式消息ID的引用
+  const streamingMsgIdRef = useRef<string | null>(null);
   // 防止重复提交的锁
   const submittingLockRef = useRef<boolean>(false);
   // 消息引用（用于回调中获取最新消息）
@@ -57,8 +57,8 @@ export function useStreamChat(
   // 流式输出缓存（用于批量更新）
   const pendingContentRef = useRef<string>('');
   const flushTimerRef = useRef<number | null>(null);
-  // 当前流式消息ID的引用（用于批量更新）
-  const streamingMsgIdRef = useRef<string | null>(null);
+  // 外部消息同步锁（防止循环更新）
+  const isInternalUpdateRef = useRef<boolean>(false);
 
   /**
    * 同步消息引用
@@ -69,21 +69,43 @@ export function useStreamChat(
 
   /**
    * 同步外部消息变化到内部状态
-   * 只在非流式输出且非加载状态下同步，避免循环更新
+   * 使用 isInternalUpdateRef 防止循环更新：
+   * - 当内部更新消息时，设置 isInternalUpdateRef = true
+   * - 外部同步 effect 检测到标记后跳过更新
    */
   useEffect(() => {
-    if (!isStreaming && !isLoading) {
-      // 只有当外部消息与当前消息不同时才更新
-      const currentLen = messagesRef.current.length;
-      const initialLen = initialMessages.length;
-      
-      if (initialLen !== currentLen || 
-          (initialLen > 0 && initialMessages[initialLen - 1].content !== messagesRef.current[currentLen - 1]?.content)) {
-        setMessages(initialMessages);
-        setError(null);
-      }
+    // 如果是内部更新导致的变化，跳过同步
+    if (isInternalUpdateRef.current) {
+      isInternalUpdateRef.current = false;
+      return;
+    }
+
+    // 流式输出或加载中时不同步
+    if (isStreaming || isLoading) {
+      return;
+    }
+
+    // 比较是否真的需要更新（长度或最后一条消息内容不同）
+    const currentLen = messagesRef.current.length;
+    const initialLen = initialMessages.length;
+    
+    if (initialLen !== currentLen || 
+        (initialLen > 0 && initialMessages[initialLen - 1].content !== messagesRef.current[currentLen - 1]?.content)) {
+      setMessages(initialMessages);
+      setError(null);
     }
   }, [initialMessages, isStreaming, isLoading]);
+
+  /**
+   * 内部更新消息（设置标记防止外部同步回来）
+   */
+  const internalSetMessages = useCallback(
+    (updater: (prev: ChatMessage[]) => ChatMessage[]): void => {
+      isInternalUpdateRef.current = true;
+      setMessages((prev) => updater(prev));
+    },
+    []
+  );
 
   /**
    * 批量更新流式消息内容（防抖）
@@ -98,6 +120,7 @@ export function useStreamChat(
       const msgId = streamingMsgIdRef.current;
 
       if (content && msgId) {
+        isInternalUpdateRef.current = true;
         setMessages((prev) =>
           prev.map((msg) =>
             msg.id === msgId
@@ -116,6 +139,7 @@ export function useStreamChat(
    */
   const updateMessages = useCallback(
     (updater: (prev: ChatMessage[]) => ChatMessage[]): void => {
+      isInternalUpdateRef.current = true;
       setMessages((prev) => updater(prev));
     },
     []
@@ -148,6 +172,25 @@ export function useStreamChat(
     } catch {
       backendAvailableRef.current = false;
       return false;
+    }
+  }, []);
+
+  /**
+   * 立即刷新待处理的内容
+   */
+  const flushNow = useCallback(() => {
+    if (pendingContentRef.current && streamingMsgIdRef.current) {
+      const remainingContent = pendingContentRef.current;
+      const msgId = streamingMsgIdRef.current;
+      isInternalUpdateRef.current = true;
+      setMessages((prev) =>
+        prev.map((msg) =>
+          msg.id === msgId
+            ? { ...msg, content: msg.content + remainingContent }
+            : msg
+        )
+      );
+      pendingContentRef.current = '';
     }
   }, []);
 
@@ -220,26 +263,12 @@ export function useStreamChat(
           },
 
           onMessageDelta: (data) => {
-            // 使用防抖批量更新，减少重渲染频率
             pendingContentRef.current += data.content;
             flushPendingContent();
           },
 
           onMessageEnd: (data) => {
-            // 立即刷新剩余内容
-            if (pendingContentRef.current && streamingMsgIdRef.current) {
-              const remainingContent = pendingContentRef.current;
-              const msgId = streamingMsgIdRef.current;
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === msgId
-                    ? { ...msg, content: msg.content + remainingContent }
-                    : msg
-                )
-              );
-              pendingContentRef.current = '';
-            }
-
+            flushNow();
             setIsStreaming(false);
             if (data.messageId) {
               updateMessageById(data.messageId, {
@@ -250,20 +279,7 @@ export function useStreamChat(
           },
 
           onDone: () => {
-            // 立即刷新剩余内容
-            if (pendingContentRef.current && streamingMsgIdRef.current) {
-              const remainingContent = pendingContentRef.current;
-              const msgId = streamingMsgIdRef.current;
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === msgId
-                    ? { ...msg, content: msg.content + remainingContent }
-                    : msg
-                )
-              );
-              pendingContentRef.current = '';
-            }
-
+            flushNow();
             setIsStreaming(false);
             setIsLoading(false);
             streamingMsgIdRef.current = null;
@@ -271,12 +287,14 @@ export function useStreamChat(
 
           onError: (err) => {
             console.error('流式请求错误:', err);
+            flushNow();
             setError(err);
             setIsStreaming(false);
             setIsLoading(false);
 
             if (streamingMsgIdRef.current) {
               const msgId = streamingMsgIdRef.current;
+              isInternalUpdateRef.current = true;
               setMessages((prev) =>
                 prev.map((msg) =>
                   msg.id === msgId
@@ -321,7 +339,7 @@ export function useStreamChat(
         }, 300);
       }
     },
-    [options, updateMessages, updateMessageById, checkBackend, flushPendingContent]
+    [options, updateMessages, updateMessageById, checkBackend, flushPendingContent, flushNow]
   );
 
   /**
@@ -331,21 +349,7 @@ export function useStreamChat(
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-
-      // 立即刷新剩余内容
-      if (pendingContentRef.current && streamingMsgIdRef.current) {
-        const remainingContent = pendingContentRef.current;
-        const msgId = streamingMsgIdRef.current;
-        setMessages((prev) =>
-          prev.map((msg) =>
-            msg.id === msgId
-              ? { ...msg, content: msg.content + remainingContent }
-              : msg
-          )
-        );
-        pendingContentRef.current = '';
-      }
-
+      flushNow();
       setIsStreaming(false);
       setIsLoading(false);
 
@@ -358,13 +362,14 @@ export function useStreamChat(
 
       console.log('请求已被用户中断');
     }
-  }, [updateMessageById]);
+  }, [updateMessageById, flushNow]);
 
   /**
    * 清空消息
    */
   const clearMessages = useCallback((): void => {
     abortRequest();
+    isInternalUpdateRef.current = true;
     setMessages([]);
     messagesRef.current = [];
     setError(null);

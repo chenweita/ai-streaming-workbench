@@ -30,6 +30,12 @@ const App: React.FC = () => {
   // 待处理的会话ID（用于在会话创建完成后发送消息）
   const pendingConversationIdRef = useRef<string | null>(null);
   const pendingMessageRef = useRef<string | null>(null);
+  // 上次同步的消息哈希（用于比较是否需要同步）
+  const lastSyncHashRef = useRef<string>('');
+  // 同步防抖定时器
+  const syncTimerRef = useRef<number | null>(null);
+  // 最新消息引用（用于setTimeout回调中获取最新值）
+  const messagesRef = useRef<ChatMessage[]>([]);
 
   // 会话管理
   const {
@@ -57,6 +63,11 @@ const App: React.FC = () => {
     conversationId: currentConversationId || undefined,
   });
 
+  // 同步消息到ref，供setTimeout回调使用
+  useEffect(() => {
+    messagesRef.current = messages;
+  }, [messages]);
+
   // 网络状态监听
   const { isOnline, reconnect } = useNetworkStatus(
     useCallback((status: 'online' | 'offline') => {
@@ -69,14 +80,49 @@ const App: React.FC = () => {
   );
 
   /**
- * 同步消息到会话存储
- * 只在非流式输出状态下同步，避免频繁更新导致闪烁
- */
+   * 同步消息到会话存储（带防抖和哈希比较）
+   * 避免每次messages变化都立即同步，减少循环更新风险
+   */
   useEffect(() => {
-    if (currentConversationId && messages.length > 0 && !isStreaming) {
-      updateConversation(currentConversationId, { messages });
+    // 流式输出中或加载中时不同步
+    if (!currentConversationId || messages.length === 0 || isStreaming || isLoading) {
+      return;
     }
-  }, [messages, currentConversationId, updateConversation, isStreaming]);
+
+    // 计算消息哈希（简化版：消息数量 + 最后一条内容）
+    const lastMsg = messages[messages.length - 1];
+    const newHash = `${messages.length}:${lastMsg?.content.slice(0, 100) || ''}:${lastMsg?.status || ''}`;
+
+    // 如果哈希没变化，跳过同步
+    if (newHash === lastSyncHashRef.current) {
+      return;
+    }
+
+    // 清除之前的定时器
+    if (syncTimerRef.current) {
+      clearTimeout(syncTimerRef.current);
+    }
+
+    // 使用防抖：500ms后同步，确保流式输出完成后再同步
+    syncTimerRef.current = window.setTimeout(() => {
+      // 再次检查是否仍需要同步
+      const currentLastMsg = messagesRef.current[messagesRef.current.length - 1];
+      const currentHash = `${messagesRef.current.length}:${currentLastMsg?.content.slice(0, 100) || ''}:${currentLastMsg?.status || ''}`;
+      
+      if (currentHash !== lastSyncHashRef.current) {
+        lastSyncHashRef.current = currentHash;
+        updateConversation(currentConversationId, { messages: messagesRef.current });
+      }
+      syncTimerRef.current = null;
+    }, 500);
+
+    // 清理函数
+    return () => {
+      if (syncTimerRef.current) {
+        clearTimeout(syncTimerRef.current);
+      }
+    };
+  }, [messages, currentConversationId, updateConversation, isStreaming, isLoading]);
 
   /**
    * 检查是否有待处理的消息需要发送
