@@ -102,17 +102,39 @@
 
   /* 代码块样式 */
   .code-block {
-    @apply bg-gray-900 text-gray-100 rounded-lg overflow-hidden my-2;
+    @apply bg-gray-900 rounded-lg overflow-hidden my-3 border border-gray-700;
   }
 
   .code-block-header {
-    @apply flex items-center justify-between px-4 py-2 bg-gray-800 text-sm text-gray-400;
+    @apply flex items-center justify-between px-4 py-2 bg-gray-800 text-sm text-gray-300 border-b border-gray-700;
+  }
+
+  .code-block-header span:first-child {
+    @apply font-medium text-gray-100;
+  }
+
+  .code-block-header span:last-child {
+    @apply text-gray-500 text-xs;
+  }
+
+  /* 代码块内pre样式重置 */
+  .code-block pre {
+    @apply m-0 p-0;
+  }
+
+  .code-block code {
+    @apply bg-transparent p-0 text-inherit font-mono;
   }
 
   /* 打字机效果光标 */
   .typing-cursor::after {
     content: '▋';
-    @apply inline-block w-0.5 h-4 ml-0.5 bg-gray-800 animate-pulse;
+    @apply inline-block w-0.5 h-4 ml-0.5 bg-gray-800 animate-pulse align-middle;
+  }
+
+  /* 用户消息中的打字光标颜色 */
+  .message-bubble-user .typing-cursor::after {
+    @apply bg-white;
   }
 
   /* 加载指示器 */
@@ -175,12 +197,18 @@
     @apply my-1;
   }
 
-  .markdown-content code:not(.code-block) {
-    @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono text-pink-600;
+  /* 行内代码 - 排除代码块内的code */
+  .markdown-content :not(.code-block) > code {
+    @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono text-pink-600 border border-gray-200;
   }
 
   .markdown-content pre {
     @apply my-3;
+  }
+
+  /* 代码块内的样式重置 */
+  .markdown-content pre > code {
+    @apply bg-transparent p-0 text-inherit;
   }
 
   .markdown-content blockquote {

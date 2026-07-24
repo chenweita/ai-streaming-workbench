@@ -12,7 +12,7 @@ import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
-import { ChatMessage } from '../types';
+import { ChatMessage, MessageStatus } from '../types';
 import { formatTimestamp } from '../utils/helpers';
 
 interface MessageBubbleProps {
@@ -69,6 +69,9 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
           {message.status === 'error' && (
             <span className="text-red-500">错误</span>
           )}
+          {message.status === 'aborted' && (
+            <span className="text-yellow-500">已中断</span>
+          )}
         </div>
 
         {/* 消息内容 - Markdown或纯文本 */}
@@ -82,7 +85,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             <p className="whitespace-pre-wrap">{message.content}</p>
           ) : (
             // AI消息使用Markdown渲染
-            <MarkdownRenderer content={message.content} isStreaming={isStreaming} />
+            <MarkdownRenderer
+              content={message.content}
+              isStreaming={isStreaming}
+              messageStatus={message.status}
+            />
           )}
         </div>
 
@@ -110,15 +117,31 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
 interface MarkdownRendererProps {
   content: string;
   isStreaming?: boolean;
+  messageStatus?: MessageStatus;
 }
 
-const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
-  if (!content) {
+const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
+  content,
+  messageStatus,
+}) => {
+  const showLoading =
+    !content && (messageStatus === 'pending' || messageStatus === 'streaming');
+
+  if (showLoading) {
     return (
       <div className="flex items-center gap-1 py-2">
         <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '0ms' }} />
         <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '150ms' }} />
         <span className="w-2 h-2 bg-gray-400 rounded-full animate-bounce" style={{ animationDelay: '300ms' }} />
+      </div>
+    );
+  }
+
+  // 已中断且无内容时显示提示
+  if (!content && messageStatus === 'aborted') {
+    return (
+      <div className="text-gray-400 italic py-1 text-sm">
+        [已中断，生成内容为空]
       </div>
     );
   }

@@ -7,7 +7,7 @@
 export type MessageRole = 'user' | 'assistant' | 'system';
 
 /** 消息状态 */
-export type MessageStatus = 'pending' | 'streaming' | 'completed' | 'error';
+export type MessageStatus = 'pending' | 'streaming' | 'completed' | 'error' | 'aborted';
 
 /** 单条聊天消息 */
 export interface ChatMessage {

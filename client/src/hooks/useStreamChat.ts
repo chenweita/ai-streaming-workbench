@@ -238,7 +238,23 @@ export function useStreamChat(
         const newMessages = [...messagesRef.current, userMessage, assistantMessage];
         updateMessages(() => newMessages);
 
-        const historyMessages = [...messagesRef.current, userMessage];
+        // 构建历史消息时过滤掉无效消息
+        // - 状态为 pending/streaming 的消息（正在生成的消息）
+        // - 状态为 error 的消息（错误消息）
+        // - 状态为 aborted 的消息（被中断的消息）
+        // - AI 消息中以 [已中断] 开头的内容
+        const historyMessages = [
+          ...messagesRef.current.filter((m) => {
+            // 只保留已完成的、有效的消息
+            if (m.status === 'pending' || m.status === 'streaming') return false;
+            if (m.status === 'error' || m.status === 'aborted') return false;
+            // AI 消息以 [已中断] 开头的也要过滤
+            if (m.role === 'assistant' && m.content.startsWith('[已中断')) return false;
+            return true;
+          }),
+          userMessage,
+        ];
+
         const requestParams: StreamChatParams = {
           conversationId: conversationIdOverride || options?.conversationId,
           messages: historyMessages.map((m) => ({
@@ -361,22 +377,35 @@ export function useStreamChat(
    * 中断当前请求
    */
   const abortRequest = useCallback((): void => {
+    // 中断 AbortController
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
-      flushNow();
-      setIsStreaming(false);
-      setIsLoading(false);
-
-      if (streamingMsgIdRef.current) {
-        updateMessageById(streamingMsgIdRef.current, {
-          status: 'completed' as MessageStatus,
-        });
-        streamingMsgIdRef.current = null;
-      }
-
-      console.log('请求已被用户中断');
     }
+
+    // 立即刷新待处理的内容
+    flushNow();
+
+    // 重置所有加载状态
+    setIsStreaming(false);
+    setIsLoading(false);
+
+    // 更新消息状态为 aborted（被中断），确保 loading 停止且不参与历史
+    if (streamingMsgIdRef.current) {
+      const msgId = streamingMsgIdRef.current;
+      // 获取当前消息内容
+      const currentMsg = messagesRef.current.find((m) => m.id === msgId);
+      const currentContent = currentMsg?.content || '';
+
+      updateMessageById(msgId, {
+        status: 'aborted' as MessageStatus,
+        // 保留已生成的内容，若无则设置提示
+        content: currentContent || '[已中断]',
+      });
+      streamingMsgIdRef.current = null;
+    }
+
+    console.log('请求已被用户中断');
   }, [updateMessageById, flushNow]);
 
   /**
