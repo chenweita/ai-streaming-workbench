@@ -52,10 +52,13 @@ export function useStreamChat(
   const submittingLockRef = useRef<boolean>(false);
   // 消息引用（用于回调中获取最新消息）
   const messagesRef = useRef<ChatMessage[]>(initialMessages);
-  // 外部同步标记（防止循环更新）
-  const isExternalSyncRef = useRef<boolean>(false);
   // 后端是否可用的缓存
   const backendAvailableRef = useRef<boolean | null>(null);
+  // 流式输出缓存（用于批量更新）
+  const pendingContentRef = useRef<string>('');
+  const flushTimerRef = useRef<number | null>(null);
+  // 当前流式消息ID的引用（用于批量更新）
+  const streamingMsgIdRef = useRef<string | null>(null);
 
   /**
    * 同步消息引用
@@ -66,21 +69,47 @@ export function useStreamChat(
 
   /**
    * 同步外部消息变化到内部状态
-   * 当切换会话时，需要更新消息列表
+   * 只在非流式输出且非加载状态下同步，避免循环更新
    */
   useEffect(() => {
-    // 只在非流式输出状态下同步，避免打断正在进行的对话
     if (!isStreaming && !isLoading) {
-      // 设置外部同步标记，防止循环更新
-      isExternalSyncRef.current = true;
-      setMessages(initialMessages);
-      setError(null);
-      // 下一个微任务中重置标记
-      queueMicrotask(() => {
-        isExternalSyncRef.current = false;
-      });
+      // 只有当外部消息与当前消息不同时才更新
+      const currentLen = messagesRef.current.length;
+      const initialLen = initialMessages.length;
+      
+      if (initialLen !== currentLen || 
+          (initialLen > 0 && initialMessages[initialLen - 1].content !== messagesRef.current[currentLen - 1]?.content)) {
+        setMessages(initialMessages);
+        setError(null);
+      }
     }
   }, [initialMessages, isStreaming, isLoading]);
+
+  /**
+   * 批量更新流式消息内容（防抖）
+   */
+  const flushPendingContent = useCallback(() => {
+    if (flushTimerRef.current) {
+      clearTimeout(flushTimerRef.current);
+    }
+
+    flushTimerRef.current = window.setTimeout(() => {
+      const content = pendingContentRef.current;
+      const msgId = streamingMsgIdRef.current;
+
+      if (content && msgId) {
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === msgId
+              ? { ...msg, content: msg.content + content }
+              : msg
+          )
+        );
+        pendingContentRef.current = '';
+      }
+      flushTimerRef.current = null;
+    }, 16); // 约60fps的更新频率
+  }, []);
 
   /**
    * 更新消息列表的辅助函数
@@ -124,12 +153,9 @@ export function useStreamChat(
 
   /**
    * 发送消息
-   * @param content 消息内容
-   * @param conversationIdOverride 可选的会话ID覆盖
    */
   const sendMessage = useCallback(
     async (content: string, conversationIdOverride?: string): Promise<void> => {
-      // 检查提交锁，防止重复提交
       if (submittingLockRef.current) {
         console.warn('消息正在提交中，请稍候...');
         return;
@@ -140,14 +166,12 @@ export function useStreamChat(
         return;
       }
 
-      // 设置提交锁
       submittingLockRef.current = true;
       setError(null);
       setIsLoading(true);
       setIsStreaming(false);
 
       try {
-        // 1. 创建用户消息
         const userMessage: ChatMessage = {
           id: generateId('msg'),
           role: 'user',
@@ -156,9 +180,8 @@ export function useStreamChat(
           status: 'completed',
         };
 
-        // 2. 创建AI消息占位符（先添加，后续流式更新）
         const assistantMessageId = generateId('msg');
-        currentMessageIdRef.current = assistantMessageId;
+        streamingMsgIdRef.current = assistantMessageId;
 
         const assistantMessage: ChatMessage = {
           id: assistantMessageId,
@@ -168,11 +191,9 @@ export function useStreamChat(
           status: 'pending',
         };
 
-        // 3. 更新消息列表
         const newMessages = [...messagesRef.current, userMessage, assistantMessage];
         updateMessages(() => newMessages);
 
-        // 4. 准备请求参数（使用最新的消息引用）
         const historyMessages = [...messagesRef.current, userMessage];
         const requestParams: StreamChatParams = {
           conversationId: conversationIdOverride || options?.conversationId,
@@ -187,35 +208,39 @@ export function useStreamChat(
           maxTokens: options?.maxTokens,
         };
 
-        // 5. 设置SSE回调
         const callbacks: StreamCallbacks = {
           onMessageStart: () => {
             setIsLoading(false);
             setIsStreaming(true);
-            // 更新消息状态为流式输出中
-            if (currentMessageIdRef.current) {
-              updateMessageById(currentMessageIdRef.current, {
+            if (streamingMsgIdRef.current) {
+              updateMessageById(streamingMsgIdRef.current, {
                 status: 'streaming',
               });
             }
           },
 
           onMessageDelta: (data) => {
-            // 增量更新消息内容
-            if (currentMessageIdRef.current) {
-              setMessages((prev) =>
-                prev.map((msg) =>
-                  msg.id === currentMessageIdRef.current
-                    ? { ...msg, content: msg.content + data.content }
-                    : msg
-                )
-              );
-            }
+            // 使用防抖批量更新，减少重渲染频率
+            pendingContentRef.current += data.content;
+            flushPendingContent();
           },
 
           onMessageEnd: (data) => {
+            // 立即刷新剩余内容
+            if (pendingContentRef.current && streamingMsgIdRef.current) {
+              const remainingContent = pendingContentRef.current;
+              const msgId = streamingMsgIdRef.current;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === msgId
+                    ? { ...msg, content: msg.content + remainingContent }
+                    : msg
+                )
+              );
+              pendingContentRef.current = '';
+            }
+
             setIsStreaming(false);
-            // 更新消息状态为已完成
             if (data.messageId) {
               updateMessageById(data.messageId, {
                 status: 'completed',
@@ -225,9 +250,23 @@ export function useStreamChat(
           },
 
           onDone: () => {
+            // 立即刷新剩余内容
+            if (pendingContentRef.current && streamingMsgIdRef.current) {
+              const remainingContent = pendingContentRef.current;
+              const msgId = streamingMsgIdRef.current;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === msgId
+                    ? { ...msg, content: msg.content + remainingContent }
+                    : msg
+                )
+              );
+              pendingContentRef.current = '';
+            }
+
             setIsStreaming(false);
             setIsLoading(false);
-            currentMessageIdRef.current = null;
+            streamingMsgIdRef.current = null;
           },
 
           onError: (err) => {
@@ -236,9 +275,8 @@ export function useStreamChat(
             setIsStreaming(false);
             setIsLoading(false);
 
-            // 使用函数式更新获取最新状态
-            if (currentMessageIdRef.current) {
-              const msgId = currentMessageIdRef.current;
+            if (streamingMsgIdRef.current) {
+              const msgId = streamingMsgIdRef.current;
               setMessages((prev) =>
                 prev.map((msg) =>
                   msg.id === msgId
@@ -250,24 +288,21 @@ export function useStreamChat(
                     : msg
                 )
               );
-              currentMessageIdRef.current = null;
+              streamingMsgIdRef.current = null;
             }
           },
         };
 
-        // 6. 检测后端可用性并发送请求
         const isBackendOk = await checkBackend();
         const url = '/api/chat/stream';
 
         if (isBackendOk) {
-          // 后端可用，使用真实请求
           abortControllerRef.current = createStreamRequest(
             url,
             requestParams,
             callbacks
           );
         } else {
-          // 后端不可用，使用Mock模式
           console.warn('[Chat] 后端不可用，使用Mock模式');
           abortControllerRef.current = createMockStreamRequest(
             url,
@@ -281,13 +316,12 @@ export function useStreamChat(
         setIsLoading(false);
         setIsStreaming(false);
       } finally {
-        // 释放提交锁
         setTimeout(() => {
           submittingLockRef.current = false;
-        }, 300); // 短暂延迟防止快速重复点击
+        }, 300);
       }
     },
-    [options, updateMessages, updateMessageById, checkBackend]
+    [options, updateMessages, updateMessageById, checkBackend, flushPendingContent]
   );
 
   /**
@@ -297,15 +331,29 @@ export function useStreamChat(
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
+
+      // 立即刷新剩余内容
+      if (pendingContentRef.current && streamingMsgIdRef.current) {
+        const remainingContent = pendingContentRef.current;
+        const msgId = streamingMsgIdRef.current;
+        setMessages((prev) =>
+          prev.map((msg) =>
+            msg.id === msgId
+              ? { ...msg, content: msg.content + remainingContent }
+              : msg
+          )
+        );
+        pendingContentRef.current = '';
+      }
+
       setIsStreaming(false);
       setIsLoading(false);
 
-      // 更新当前消息状态为已中断（作为完成状态处理）
-      if (currentMessageIdRef.current) {
-        updateMessageById(currentMessageIdRef.current, {
+      if (streamingMsgIdRef.current) {
+        updateMessageById(streamingMsgIdRef.current, {
           status: 'completed' as MessageStatus,
         });
-        currentMessageIdRef.current = null;
+        streamingMsgIdRef.current = null;
       }
 
       console.log('请求已被用户中断');
@@ -328,6 +376,9 @@ export function useStreamChat(
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();
+      if (flushTimerRef.current) {
+        clearTimeout(flushTimerRef.current);
+      }
     };
   }, []);
 

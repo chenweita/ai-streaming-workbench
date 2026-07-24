@@ -69,15 +69,14 @@ const App: React.FC = () => {
   );
 
   /**
-   * 同步消息到会话存储
-   * 注意：检查外部同步标记，防止循环更新
-   */
+ * 同步消息到会话存储
+ * 只在非流式输出状态下同步，避免频繁更新导致闪烁
+ */
   useEffect(() => {
-    // 只有当消息来自内部更新（非外部同步）时才同步
-    if (currentConversationId && messages.length > 0) {
+    if (currentConversationId && messages.length > 0 && !isStreaming) {
       updateConversation(currentConversationId, { messages });
     }
-  }, [messages, currentConversationId, updateConversation]);
+  }, [messages, currentConversationId, updateConversation, isStreaming]);
 
   /**
    * 检查是否有待处理的消息需要发送

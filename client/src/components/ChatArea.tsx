@@ -2,11 +2,11 @@
  * ChatArea组件
  * 主聊天区域
  * - 消息列表显示
- * - 自动滚动到底部
+ * - 自动滚动到底部（使用requestAnimationFrame优化）
  * - 加载状态显示
  * - 空状态提示
  */
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { ChatMessage } from '../types';
 import { MessageBubble } from './MessageBubble';
 
@@ -26,18 +26,39 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
 }) => {
   const scrollContainerRef = useRef<HTMLDivElement>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
+  const scrollRafRef = useRef<number | null>(null);
 
   /**
-   * 自动滚动到消息底部
+   * 平滑滚动到底部（使用requestAnimationFrame）
    */
-  useEffect(() => {
-    if (bottomRef.current) {
-      bottomRef.current.scrollIntoView({
-        behavior: isStreaming ? 'auto' : 'smooth',
-        block: 'end',
-      });
+  const scrollToBottom = useCallback(() => {
+    if (scrollRafRef.current) {
+      cancelAnimationFrame(scrollRafRef.current);
     }
-  }, [messages, isStreaming]);
+
+    scrollRafRef.current = requestAnimationFrame(() => {
+      if (bottomRef.current) {
+        bottomRef.current.scrollIntoView({
+          behavior: isStreaming ? 'auto' : 'smooth',
+          block: 'end',
+        });
+      }
+      scrollRafRef.current = null;
+    });
+  }, [isStreaming]);
+
+  useEffect(() => {
+    scrollToBottom();
+  }, [messages, scrollToBottom]);
+
+  // 组件卸载时清理
+  useEffect(() => {
+    return () => {
+      if (scrollRafRef.current) {
+        cancelAnimationFrame(scrollRafRef.current);
+      }
+    };
+  }, []);
 
   // 空状态
   if (messages.length === 0) {
