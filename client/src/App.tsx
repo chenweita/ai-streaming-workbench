@@ -217,6 +217,7 @@ const App: React.FC = () => {
           messages={messages}
           isLoading={isLoading}
           isStreaming={isStreaming}
+          onSendMessage={handleSendMessage}
         />
 
         {/* 输入栏 */}
