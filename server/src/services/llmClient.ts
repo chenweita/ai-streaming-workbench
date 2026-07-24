@@ -1,5 +1,5 @@
 import { config } from '../config';
-import { ApiErrorResponse } from '../../shared/types';
+import { ApiErrorResponse } from '../types/shared';
 
 /**
  * LLM客户端服务
@@ -39,15 +39,12 @@ export class LLMClient {
 
   /**
    * 发送流式请求到LLM
-   * @param messages 对话历史
-   * @param callbacks 流式回调函数
    */
   async streamChat(
     messages: LLMMessage[],
     callbacks: StreamCallbacks,
     options?: { model?: string; temperature?: number; maxTokens?: number }
   ): Promise<void> {
-    // 创建新的中断控制器
     this.abortController = new AbortController();
 
     const requestBody: LLMStreamRequest = {
@@ -58,47 +55,66 @@ export class LLMClient {
       max_tokens: options?.maxTokens,
     };
 
+    console.log('[LLM] 发送请求到:', `${this.apiBaseUrl}/chat/completions`);
+    console.log('[LLM] 使用模型:', requestBody.model);
+    console.log('[LLM] 消息数量:', messages.length);
+    console.log('[LLM] API Key 前20字符:', this.apiKey.substring(0, 20) + '...');
+    console.log('[LLM] Authorization Header:', `Bearer ${this.apiKey.substring(0, 10)}...${this.apiKey.substring(this.apiKey.length - 4)}`);
+
     try {
       const response = await fetch(`${this.apiBaseUrl}/chat/completions`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
+          'Authorization': `Bearer ${this.apiKey}`,
         },
         body: JSON.stringify(requestBody),
         signal: this.abortController.signal,
       });
 
+      console.log('[LLM] 响应状态:', response.status, response.ok);
+
       if (!response.ok) {
         const errorBody = await response.text();
-        const errorResponse: ApiErrorResponse = {
-          code: response.status,
-          message: 'LLM API请求失败',
-          detail: errorBody,
-        };
-        throw new Error(JSON.stringify(errorResponse));
+        console.error('[LLM] API错误响应:', errorBody);
+        
+        let errorMessage = 'LLM API请求失败';
+        try {
+          const errorData = JSON.parse(errorBody);
+          if (errorData.message) {
+            errorMessage = errorData.message;
+          } else if (errorData.error?.message) {
+            errorMessage = errorData.error.message;
+          }
+        } catch {
+          // 解析失败，使用默认消息
+        }
+        
+        const error = new Error(`${errorMessage} (HTTP ${response.status})`);
+        callbacks.onError(error);
+        return;
       }
 
       if (!response.body) {
-        throw new Error('响应体为空');
+        callbacks.onError(new Error('响应体为空'));
+        return;
       }
 
       // 解析流式响应
       await this.parseStreamResponse(response.body, callbacks);
     } catch (error) {
       // 如果是主动中断，不触发错误回调
-      // Node.js 中断错误的 name 属性为 'AbortError'
       if (error instanceof Error && error.name === 'AbortError') {
+        console.log('[LLM] 请求已被中断');
         return;
       }
+      console.error('[LLM] 请求异常:', error);
       callbacks.onError(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
   /**
    * 解析SSE流式响应
-   * @param body 响应体ReadableStream
-   * @param callbacks 回调函数
    */
   private async parseStreamResponse(
     body: ReadableStream<Uint8Array>,
@@ -108,6 +124,7 @@ export class LLMClient {
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
     let fullContent = '';
+    let hasError = false;
 
     try {
       while (true) {
@@ -117,27 +134,21 @@ export class LLMClient {
           break;
         }
 
-        // 解码chunk
         buffer += decoder.decode(value, { stream: true });
 
-        // 按行解析SSE数据
         const lines = buffer.split('\n');
-        // 保留最后一行（可能不完整）
         buffer = lines.pop() || '';
 
         for (const line of lines) {
           const trimmedLine = line.trim();
 
-          // 跳过空行和注释
           if (!trimmedLine || trimmedLine.startsWith(':')) {
             continue;
           }
 
-          // 解析data: 行
           if (trimmedLine.startsWith('data:')) {
             const data = trimmedLine.slice(5).trim();
 
-            // 处理 [DONE] 标记
             if (data === '[DONE]') {
               callbacks.onDone();
               return;
@@ -145,6 +156,15 @@ export class LLMClient {
 
             try {
               const jsonData = JSON.parse(data);
+              
+              // 检查是否有错误
+              if (jsonData.error) {
+                hasError = true;
+                const errorMsg = jsonData.error.message || 'LLM返回错误';
+                callbacks.onError(new Error(errorMsg));
+                return;
+              }
+
               const delta = this.extractDelta(jsonData);
 
               if (delta) {
@@ -152,7 +172,7 @@ export class LLMClient {
                 callbacks.onDelta(delta);
               }
 
-              // 检查是否有完成信息
+              // 检查是否完成
               if (jsonData.choices?.[0]?.finish_reason) {
                 const usage = jsonData.usage;
                 if (usage) {
@@ -164,15 +184,16 @@ export class LLMClient {
                 } else {
                   callbacks.onDone();
                 }
+                return;
               }
-            } catch {
-              // 忽略解析错误，继续处理
+            } catch (e) {
+              console.warn('[LLM] SSE数据解析失败:', data, e);
             }
           }
         }
       }
 
-      // 处理剩余buffer中的数据
+      // 处理剩余buffer
       if (buffer.trim()) {
         const trimmedLine = buffer.trim();
         if (trimmedLine.startsWith('data:')) {
@@ -186,26 +207,27 @@ export class LLMClient {
                 callbacks.onDelta(delta);
               }
             } catch {
-              // 忽略解析错误
+              // 忽略
             }
           }
         }
       }
 
-      // 确保完成回调被触发
-      callbacks.onDone();
+      // 只有没有出错才调用 onDone
+      if (!hasError) {
+        callbacks.onDone();
+      }
     } catch (error) {
-      // Node.js 中断错误检查
       if (error instanceof Error && error.name === 'AbortError') {
         return;
       }
+      console.error('[LLM] 流式解析错误:', error);
       callbacks.onError(error instanceof Error ? error : new Error(String(error)));
     }
   }
 
   /**
    * 从LLM响应中提取增量内容
-   * @param data LLM响应数据
    */
   private extractDelta(data: Record<string, unknown>): string {
     const choices = (data as { choices?: Array<{ delta?: { content?: string } }> }).choices;

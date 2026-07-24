@@ -8,15 +8,24 @@ dotenv.config();
  * 服务端配置 - 从环境变量读取
  * 环境变量在 .env 文件中配置，不暴露到前端
  */
+const rawApiKey = process.env.LLM_API_KEY || '';
+const trimmedApiKey = rawApiKey.trim();
+
+console.log('[Config] LLM_API_KEY 原始长度:', rawApiKey.length);
+console.log('[Config] LLM_API_KEY 处理后长度:', trimmedApiKey.length);
+console.log('[Config] LLM_API_KEY 前20字符:', trimmedApiKey.substring(0, 20) + '...');
+console.log('[Config] LLM_API_KEY 是否有空格:', trimmedApiKey.includes(' '));
+console.log('[Config] LLM_MODEL_NAME:', process.env.LLM_MODEL_NAME);
+
 export const config: ServerConfig = {
   port: Number(process.env.PORT) || 3001,
   nodeEnv: process.env.NODE_ENV || 'development',
   llm: {
-    apiKey: process.env.LLM_API_KEY || '',
+    apiKey: trimmedApiKey,
     apiBaseUrl:
       process.env.LLM_API_BASE_URL ||
       'https://dashscope.aliyuncs.com/compatible-mode/v1',
-    modelName: process.env.LLM_MODEL_NAME || 'qwen-turbo',
+    modelName: (process.env.LLM_MODEL_NAME || 'qwen-turbo').trim(),
   },
   cors: {
     origin: (process.env.CORS_ORIGIN || 'http://localhost:5173').split(',').map(

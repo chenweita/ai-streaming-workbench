@@ -1,6 +1,6 @@
 import { Router, Request, Response } from 'express';
 import { createLLMClient, LLMClient } from '../services/llmClient';
-import { ChatMessage, SSEEventType } from '../../shared/types';
+import { ChatMessage, SSEEventType } from '../types/shared';
 
 const router = Router();
 

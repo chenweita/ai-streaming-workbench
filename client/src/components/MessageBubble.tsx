@@ -123,6 +123,31 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
     );
   }
 
+  /**
+   * 从 children 中提取纯文本内容
+   * react-markdown v9 的 children 可能是字符串数组或字符串
+   */
+  const extractText = (children: React.ReactNode): string => {
+    if (typeof children === 'string') {
+      return children;
+    }
+    if (Array.isArray(children)) {
+      return children.map(child => {
+        if (typeof child === 'string') {
+          return child;
+        }
+        if (React.isValidElement(child) && child.props?.children) {
+          return extractText(child.props.children);
+        }
+        return '';
+      }).join('');
+    }
+    if (React.isValidElement(children) && children.props?.children) {
+      return extractText(children.props.children);
+    }
+    return '';
+  };
+
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -130,7 +155,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
       components={{
         code({ className, children, ...props }) {
           const match = /language-(\w+)/.exec(className || '');
-          const codeString = String(children).replace(/\n$/, '');
+          const codeString = extractText(children).replace(/\n$/, '');
 
           // react-markdown v9 不再传递 inline 属性
           // 通过检查是否有 language- 类名来判断是否为代码块
@@ -150,7 +175,6 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({ content }) => {
                     borderRadius: '0 0 0.5rem 0.5rem',
                     fontSize: '0.875rem',
                   }}
-                  {...props}
                 >
                   {codeString}
                 </SyntaxHighlighter>

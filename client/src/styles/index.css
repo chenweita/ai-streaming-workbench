@@ -61,14 +61,9 @@
     @apply flex h-screen h-dvh w-screen;
   }
 
-  /* 侧边栏 - 桌面端 */
+  /* 侧边栏 - 桌面端（在md以上断点生效） */
   .sidebar {
-    @apply w-64 flex-shrink-0 bg-gray-900 text-gray-100 h-full overflow-hidden;
-  }
-
-  /* 侧边栏 - 移动端抽屉模式 */
-  .sidebar-mobile {
-    @apply fixed left-0 top-0 bottom-0 w-[80vw] max-w-[280px] bg-gray-900 text-gray-100 z-50 transform transition-transform duration-300 ease-in-out;
+    @apply w-64 flex-shrink-0 bg-gray-900 text-gray-100 h-screen h-dvh;
   }
 
   .sidebar-overlay {

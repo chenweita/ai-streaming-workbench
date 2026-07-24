@@ -158,19 +158,20 @@ export function useStreamChat(
   );
 
   /**
-   * 检测后端是否可用
+   * 检测后端是否可用（带超时保护）
    */
   const checkBackend = useCallback(async (): Promise<boolean> => {
-    if (backendAvailableRef.current !== null) {
-      return backendAvailableRef.current;
-    }
-
     try {
-      const response = await fetch('/api/health', { method: 'GET', signal: AbortSignal.timeout(2000) });
-      backendAvailableRef.current = response.ok;
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2秒超时
+      const response = await fetch('/api/health', { 
+        method: 'GET', 
+        signal: controller.signal 
+      });
+      clearTimeout(timeoutId);
       return response.ok;
     } catch {
-      backendAvailableRef.current = false;
+      // 超时或网络错误，默认后端不可用
       return false;
     }
   }, []);
@@ -252,10 +253,23 @@ export function useStreamChat(
         };
 
         const callbacks: StreamCallbacks = {
-          onMessageStart: () => {
+          onMessageStart: (data) => {
+            console.log('[Chat] 消息开始:', data);
             setIsLoading(false);
             setIsStreaming(true);
-            if (streamingMsgIdRef.current) {
+            // 如果后端返回了新的 messageId，需要更新消息列表中的ID
+            if (data.messageId && data.messageId !== streamingMsgIdRef.current) {
+              const oldId = streamingMsgIdRef.current;
+              const newId = data.messageId;
+              streamingMsgIdRef.current = newId;
+              // 更新消息列表中的ID
+              isInternalUpdateRef.current = true;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === oldId ? { ...msg, id: newId, status: 'streaming' } : msg
+                )
+              );
+            } else if (streamingMsgIdRef.current) {
               updateMessageById(streamingMsgIdRef.current, {
                 status: 'streaming',
               });
@@ -301,7 +315,8 @@ export function useStreamChat(
                     ? {
                         ...msg,
                         status: 'error',
-                        content: msg.content || '抱歉，出现了错误，请重试。',
+                        // 显示真实的错误信息
+                        content: `⚠️ ${err.message || '抱歉，出现了错误，请重试。'}`,
                       }
                     : msg
                 )

@@ -35,7 +35,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
 }) => {
   return (
     <>
-      {/* 移动端遮罩层 */}
+      {/* 移动端遮罩层 - 仅在移动端显示 */}
       {isOpen && (
         <div
           className="sidebar-overlay md:hidden"
@@ -46,7 +46,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* 侧边栏主体 - 桌面端使用flex布局，移动端使用抽屉 */}
       <aside
-        className={`md:sidebar ${isOpen ? 'sidebar-mobile translate-x-0' : 'sidebar-mobile -translate-x-full'} md:translate-x-0`}
+        className={`
+          fixed left-0 top-0 bottom-0 w-[80vw] max-w-[280px] 
+          bg-gray-900 text-gray-100 z-50 transform transition-transform duration-300 ease-in-out
+          ${isOpen ? 'translate-x-0' : '-translate-x-full'}
+          md:relative md:w-64 md:flex-shrink-0 md:h-screen md:overflow-hidden md:translate-x-0 md:z-auto md:bg-gray-900
+        `}
         aria-label="会话列表"
       >
         {/* 头部 - Logo和新建按钮 */}
@@ -54,7 +59,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <div className="flex items-center justify-between p-4 border-b border-gray-700">
             <h1 className="text-lg font-bold text-white">AI 对话工作台</h1>
             <button
-              className="p-2 rounded-lg hover:bg-gray-700 transition-colors"
+              className="md:hidden p-2 rounded-lg hover:bg-gray-700 transition-colors"
               onClick={onClose}
               aria-label="关闭侧边栏"
             >
