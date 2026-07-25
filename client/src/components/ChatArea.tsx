@@ -122,7 +122,8 @@ export const ChatArea: React.FC<ChatAreaProps> = ({
       ref={scrollContainerRef}
       className="chat-area"
     >
-      <div className="max-w-3xl mx-auto">
+      {/* 使用25px左右边距，让聊天区域铺满 */}
+      <div className="w-full px-[25px] md:px-[32px]">
         {/* 消息列表 */}
         {messages.map((message, index) => (
           <MessageBubble

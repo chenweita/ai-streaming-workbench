@@ -343,8 +343,8 @@ const App: React.FC = () => {
 
         {/* 主聊天区域 */}
         <main className="main-content">
-          {/* 顶部标题栏 */}
-          <header className="flex-shrink-0 bg-white border-b border-gray-200 px-4 py-3 flex items-center justify-between">
+          {/* 顶部标题栏 - 使用与聊天区域一致的边距 */}
+          <header className="flex-shrink-0 bg-white border-b border-gray-200 px-[25px] md:px-[32px] py-3 flex items-center justify-between">
             <button
               className="md:hidden p-2 -ml-2 text-gray-600 hover:text-gray-900"
               onClick={() => setSidebarOpen(true)}

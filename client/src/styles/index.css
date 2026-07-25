@@ -87,54 +87,45 @@
 
   /* 消息气泡 */
   .message-bubble {
-    @apply max-w-full md:max-w-[80%] rounded-2xl px-4 py-3 break-words;
+    @apply rounded-2xl px-4 py-3 break-words;
     word-wrap: break-word;
     overflow-wrap: break-word;
   }
 
+  /* 用户消息 - 右侧，较窄 */
   .message-bubble-user {
-    @apply bg-primary-500 text-white;
+    @apply bg-primary-500 text-white max-w-[75%] md:max-w-[60%];
   }
 
+  /* AI消息 - 左侧，更宽 */
   .message-bubble-assistant {
-    @apply bg-white text-gray-800 shadow-sm border border-gray-200;
+    @apply bg-white text-gray-800 shadow-sm border border-gray-200 max-w-[90%] md:max-w-[85%];
   }
 
-  /* 代码块样式 */
-  .code-block {
-    @apply bg-gray-900 rounded-lg overflow-hidden my-3 border border-gray-700;
-  }
-
-  .code-block-header {
-    @apply flex items-center justify-between px-4 py-2 bg-gray-800 text-sm text-gray-300 border-b border-gray-700;
-  }
-
-  .code-block-header span:first-child {
-    @apply font-medium text-gray-100;
-  }
-
-  .code-block-header span:last-child {
-    @apply text-gray-500 text-xs;
+  /* 代码块样式 - 浅色编辑器风格 */
+  .code-block-light {
+    @apply my-3 rounded-lg overflow-hidden;
+    border: 1px solid #e5e7eb;
   }
 
   /* 代码块内pre样式重置 */
-  .code-block pre {
+  .code-block-light pre {
     @apply m-0 p-0;
   }
 
-  .code-block code {
+  .code-block-light code {
     @apply bg-transparent p-0 text-inherit font-mono;
   }
 
-  /* 打字机效果光标 */
+  /* 打字机效果光标 - 纤细优雅 */
   .typing-cursor::after {
-    content: '▋';
-    @apply inline-block w-0.5 h-4 ml-0.5 bg-gray-800 animate-pulse align-middle;
+    content: '';
+    @apply inline-block w-px h-3 ml-0.5 bg-gray-600 animate-pulse align-middle;
   }
 
   /* 用户消息中的打字光标颜色 */
   .message-bubble-user .typing-cursor::after {
-    @apply bg-white;
+    @apply bg-white/80;
   }
 
   /* 加载指示器 */
@@ -198,7 +189,7 @@
   }
 
   /* 行内代码 - 排除代码块内的code */
-  .markdown-content :not(.code-block) > code {
+  .markdown-content :not(.code-block-light) > code {
     @apply bg-gray-100 px-1.5 py-0.5 rounded text-sm font-mono text-pink-600 border border-gray-200;
   }
 

@@ -11,7 +11,7 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeHighlight from 'rehype-highlight';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
-import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+import { vs } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ChatMessage, MessageStatus } from '../types';
 import { formatTimestamp } from '../utils/helpers';
 
@@ -184,19 +184,20 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
           // 通过检查是否有 language- 类名来判断是否为代码块
           if (match) {
             return (
-              <div className="code-block">
-                <div className="code-block-header">
-                  <span>{match[1]}</span>
-                  <span className="text-xs">代码块</span>
-                </div>
+              <div className="code-block-light">
                 <SyntaxHighlighter
-                  style={oneDark}
+                  style={vs}
                   language={match[1]}
                   PreTag="div"
                   customStyle={{
                     margin: 0,
-                    borderRadius: '0 0 0.5rem 0.5rem',
-                    fontSize: '0.875rem',
+                    padding: '1rem 1.25rem',
+                    borderRadius: '0.5rem',
+                    fontSize: '0.85rem',
+                    lineHeight: '1.6',
+                    background: '#f8f9fa',
+                    border: '1px solid #e5e7eb',
+                    boxShadow: 'none',
                   }}
                 >
                   {codeString}

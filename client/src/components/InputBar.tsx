@@ -91,7 +91,8 @@ export const InputBar: React.FC<InputBarProps> = ({
 
   return (
     <div className="input-container safe-area-bottom">
-      <div className="max-w-3xl mx-auto px-4 py-3">
+      {/* 使用与聊天区域一致的25px左右边距 */}
+      <div className="w-full px-[25px] md:px-[32px] py-3">
         {/* 流式输出中的中断按钮 */}
         {canAbort && (
           <div className="flex justify-center mb-2">
@@ -111,78 +112,82 @@ export const InputBar: React.FC<InputBarProps> = ({
           </div>
         )}
 
-        {/* 输入框 */}
-        <div className="relative flex items-end gap-2 bg-gray-100 rounded-2xl border border-gray-200 focus-within:border-primary-300 focus-within:ring-2 focus-within:ring-primary-100 transition-all p-2">
-          <textarea
-            ref={textareaRef}
-            className="input-base flex-1 bg-transparent border-none resize-none max-h-[150px] text-sm"
-            placeholder={
-              isLoading
-                ? 'AI正在思考...'
-                : '输入消息，Enter发送，Shift+Enter换行'
-            }
-            value={inputValue}
-            onChange={(e) => {
-              setInputValue(e.target.value.slice(0, maxLength));
-            }}
-            onKeyDown={handleKeyDown}
-            disabled={isLoading || disabled}
-            rows={1}
-            autoFocus
-          />
+        {/* 输入框容器 */}
+        <div className="bg-gray-100 rounded-2xl border border-gray-200 focus-within:border-primary-300 focus-within:ring-2 focus-within:ring-primary-100 transition-all p-2">
+          <div className="flex items-end gap-2">
+            <textarea
+              ref={textareaRef}
+              className="input-base flex-1 bg-transparent border-none resize-none max-h-[150px] text-sm"
+              placeholder={
+                isLoading
+                  ? 'AI正在思考...'
+                  : '输入消息，Enter发送，Shift+Enter换行'
+              }
+              value={inputValue}
+              onChange={(e) => {
+                setInputValue(e.target.value.slice(0, maxLength));
+              }}
+              onKeyDown={handleKeyDown}
+              disabled={isLoading || disabled}
+              rows={1}
+              autoFocus
+            />
 
-          {/* 字符计数 */}
-          <div className="absolute bottom-12 right-12 text-xs text-gray-400">
-            {inputValue.length}/{maxLength}
+            {/* 发送按钮 */}
+            <button
+              className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
+                canSend
+                  ? 'bg-primary-500 hover:bg-primary-600 text-white cursor-pointer'
+                  : 'bg-gray-300 text-gray-500 cursor-not-allowed'
+              }`}
+              onClick={handleSend}
+              disabled={!canSend}
+              aria-label="发送消息"
+            >
+              {isLoading ? (
+                <svg
+                  className="w-5 h-5 animate-spin"
+                  fill="none"
+                  viewBox="0 0 24 24"
+                >
+                  <circle
+                    className="opacity-25"
+                    cx="12"
+                    cy="12"
+                    r="10"
+                    stroke="currentColor"
+                    strokeWidth="4"
+                  />
+                  <path
+                    className="opacity-75"
+                    fill="currentColor"
+                    d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
+                  />
+                </svg>
+              ) : (
+                <svg
+                  className="w-5 h-5"
+                  fill="none"
+                  stroke="currentColor"
+                  viewBox="0 0 24 24"
+                >
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth={2}
+                    d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
+                  />
+                </svg>
+              )}
+            </button>
           </div>
 
-          {/* 发送按钮 */}
-          <button
-            className={`flex-shrink-0 w-10 h-10 rounded-xl flex items-center justify-center transition-all ${
-              canSend
-                ? 'bg-primary-500 hover:bg-primary-600 text-white cursor-pointer'
-                : 'bg-gray-300 text-gray-500 cursor-not-allowed'
-            }`}
-            onClick={handleSend}
-            disabled={!canSend}
-            aria-label="发送消息"
-          >
-            {isLoading ? (
-              <svg
-                className="w-5 h-5 animate-spin"
-                fill="none"
-                viewBox="0 0 24 24"
-              >
-                <circle
-                  className="opacity-25"
-                  cx="12"
-                  cy="12"
-                  r="10"
-                  stroke="currentColor"
-                  strokeWidth="4"
-                />
-                <path
-                  className="opacity-75"
-                  fill="currentColor"
-                  d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"
-                />
-              </svg>
-            ) : (
-              <svg
-                className="w-5 h-5"
-                fill="none"
-                stroke="currentColor"
-                viewBox="0 0 24 24"
-              >
-                <path
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  strokeWidth={2}
-                  d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8"
-                />
-              </svg>
-            )}
-          </button>
+          {/* 字符计数 - 底部右对齐 */}
+          <div className="flex justify-end mt-1 pr-1">
+            <span className={`text-xs ${inputValue.length > maxLength * 0.9 ? 'text-red-500' : 'text-gray-400'}`}>
+              {inputValue.length}/{maxLength}
+            </span>
+          </div>
         </div>
 
         {/* 底部提示 */}
