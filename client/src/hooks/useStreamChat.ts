@@ -52,7 +52,7 @@ export function useStreamChat(
   const submittingLockRef = useRef<boolean>(false);
   // 消息引用（用于回调中获取最新消息）
   const messagesRef = useRef<ChatMessage[]>(initialMessages);
-  // 后端是否可用的缓存
+  // 后端是否可用的缓存（30秒有效）
   const backendAvailableRef = useRef<boolean | null>(null);
   // 流式输出缓存（用于批量更新）
   const pendingContentRef = useRef<string>('');
@@ -69,36 +69,29 @@ export function useStreamChat(
 
   /**
    * 同步外部消息变化到内部状态
-   * 使用 isInternalUpdateRef 防止循环更新：
-   * - 当内部更新消息时，设置 isInternalUpdateRef = true
-   * - 外部同步 effect 检测到标记后跳过更新
    */
   useEffect(() => {
-    // 如果是内部更新导致的变化，跳过同步
     if (isInternalUpdateRef.current) {
       isInternalUpdateRef.current = false;
       return;
     }
-
-    // 流式输出或加载中时不同步
     if (isStreaming || isLoading) {
       return;
     }
-
-    // 比较是否真的需要更新（长度或最后一条消息内容不同）
     const currentLen = messagesRef.current.length;
     const initialLen = initialMessages.length;
-    
-    if (initialLen !== currentLen || 
-        (initialLen > 0 && initialMessages[initialLen - 1].content !== messagesRef.current[currentLen - 1]?.content)) {
+    if (
+      initialLen !== currentLen ||
+      (initialLen > 0 &&
+        initialMessages[initialLen - 1].content !==
+          messagesRef.current[currentLen - 1]?.content)
+    ) {
       setMessages(initialMessages);
       setError(null);
     }
   }, [initialMessages, isStreaming, isLoading]);
 
-  /**
-   * 内部更新消息（设置标记防止外部同步回来）
-   */
+  /** 内部更新消息 */
   const internalSetMessages = useCallback(
     (updater: (prev: ChatMessage[]) => ChatMessage[]): void => {
       isInternalUpdateRef.current = true;
@@ -107,18 +100,14 @@ export function useStreamChat(
     []
   );
 
-  /**
-   * 批量更新流式消息内容（防抖）
-   */
+  /** 批量刷新流式内容（16ms 防抖 ≈ 60fps） */
   const flushPendingContent = useCallback(() => {
     if (flushTimerRef.current) {
       clearTimeout(flushTimerRef.current);
     }
-
     flushTimerRef.current = window.setTimeout(() => {
       const content = pendingContentRef.current;
       const msgId = streamingMsgIdRef.current;
-
       if (content && msgId) {
         isInternalUpdateRef.current = true;
         setMessages((prev) =>
@@ -131,12 +120,10 @@ export function useStreamChat(
         pendingContentRef.current = '';
       }
       flushTimerRef.current = null;
-    }, 16); // 约60fps的更新频率
+    }, 16);
   }, []);
 
-  /**
-   * 更新消息列表的辅助函数
-   */
+  /** 更新消息列表 */
   const updateMessages = useCallback(
     (updater: (prev: ChatMessage[]) => ChatMessage[]): void => {
       isInternalUpdateRef.current = true;
@@ -145,9 +132,7 @@ export function useStreamChat(
     []
   );
 
-  /**
-   * 根据ID更新特定消息
-   */
+  /** 根据ID更新特定消息 */
   const updateMessageById = useCallback(
     (id: string, updates: Partial<ChatMessage>): void => {
       updateMessages((prev) =>
@@ -158,27 +143,36 @@ export function useStreamChat(
   );
 
   /**
-   * 检测后端是否可用（带超时保护）
+   * 检测后端是否可用（带 30 秒缓存，避免每次 sendMessage 阻塞 2 秒）
    */
   const checkBackend = useCallback(async (): Promise<boolean> => {
+    if (backendAvailableRef.current !== null) {
+      return backendAvailableRef.current;
+    }
     try {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 2000); // 2秒超时
-      const response = await fetch('/api/health', { 
-        method: 'GET', 
-        signal: controller.signal 
+      const timeoutId = setTimeout(() => controller.abort(), 2000);
+      const response = await fetch('/api/health', {
+        method: 'GET',
+        signal: controller.signal,
       });
       clearTimeout(timeoutId);
-      return response.ok;
+      const ok = response.ok;
+      backendAvailableRef.current = ok;
+      setTimeout(() => {
+        backendAvailableRef.current = null;
+      }, 30000);
+      return ok;
     } catch {
-      // 超时或网络错误，默认后端不可用
+      backendAvailableRef.current = false;
+      setTimeout(() => {
+        backendAvailableRef.current = null;
+      }, 30000);
       return false;
     }
   }, []);
 
-  /**
-   * 立即刷新待处理的内容
-   */
+  /** 立即刷新待处理内容 */
   const flushNow = useCallback(() => {
     if (pendingContentRef.current && streamingMsgIdRef.current) {
       const remainingContent = pendingContentRef.current;
@@ -196,7 +190,8 @@ export function useStreamChat(
   }, []);
 
   /**
-   * 发送消息
+   * 发送消息（核心链路）
+   * 流程：锁检查 → 状态初始化 → 消息入列 → 后端探测 → 发起 SSE
    */
   const sendMessage = useCallback(
     async (content: string, conversationIdOverride?: string): Promise<void> => {
@@ -204,7 +199,6 @@ export function useStreamChat(
         console.warn('消息正在提交中，请稍候...');
         return;
       }
-
       if (!content.trim()) {
         console.warn('消息内容不能为空');
         return;
@@ -238,17 +232,10 @@ export function useStreamChat(
         const newMessages = [...messagesRef.current, userMessage, assistantMessage];
         updateMessages(() => newMessages);
 
-        // 构建历史消息时过滤掉无效消息
-        // - 状态为 pending/streaming 的消息（正在生成的消息）
-        // - 状态为 error 的消息（错误消息）
-        // - 状态为 aborted 的消息（被中断的消息）
-        // - AI 消息中以 [已中断] 开头的内容
         const historyMessages = [
           ...messagesRef.current.filter((m) => {
-            // 只保留已完成的、有效的消息
             if (m.status === 'pending' || m.status === 'streaming') return false;
             if (m.status === 'error' || m.status === 'aborted') return false;
-            // AI 消息以 [已中断] 开头的也要过滤
             if (m.role === 'assistant' && m.content.startsWith('[已中断')) return false;
             return true;
           }),
@@ -270,19 +257,22 @@ export function useStreamChat(
 
         const callbacks: StreamCallbacks = {
           onMessageStart: (data) => {
-            console.log('[Chat] 消息开始:', data);
+            console.log(`[Chat] ${new Date().toISOString()} 消息开始:`, data);
             setIsLoading(false);
             setIsStreaming(true);
-            // 如果后端返回了新的 messageId，需要更新消息列表中的ID
-            if (data.messageId && data.messageId !== streamingMsgIdRef.current) {
+            if (
+              data.messageId &&
+              data.messageId !== streamingMsgIdRef.current
+            ) {
               const oldId = streamingMsgIdRef.current;
               const newId = data.messageId;
               streamingMsgIdRef.current = newId;
-              // 更新消息列表中的ID
               isInternalUpdateRef.current = true;
               setMessages((prev) =>
                 prev.map((msg) =>
-                  msg.id === oldId ? { ...msg, id: newId, status: 'streaming' } : msg
+                  msg.id === oldId
+                    ? { ...msg, id: newId, status: 'streaming' as MessageStatus }
+                    : msg
                 )
               );
             } else if (streamingMsgIdRef.current) {
@@ -294,6 +284,9 @@ export function useStreamChat(
 
           onMessageDelta: (data) => {
             pendingContentRef.current += data.content;
+            if (pendingContentRef.current.length <= 10) {
+              console.log(`[Chat] ${new Date().toISOString()} 首字到达 (累计${pendingContentRef.current.length}字)`);
+            }
             flushPendingContent();
           },
 
@@ -330,8 +323,7 @@ export function useStreamChat(
                   msg.id === msgId
                     ? {
                         ...msg,
-                        status: 'error',
-                        // 显示真实的错误信息
+                        status: 'error' as MessageStatus,
                         content: `⚠️ ${err.message || '抱歉，出现了错误，请重试。'}`,
                       }
                     : msg
@@ -346,6 +338,7 @@ export function useStreamChat(
         const url = '/api/chat/stream';
 
         if (isBackendOk) {
+          console.log(`[Chat] ${new Date().toISOString()} 后端可用，发起 SSE 请求`);
           abortControllerRef.current = createStreamRequest(
             url,
             requestParams,
@@ -365,52 +358,36 @@ export function useStreamChat(
         setIsLoading(false);
         setIsStreaming(false);
       } finally {
-        setTimeout(() => {
-          submittingLockRef.current = false;
-        }, 300);
+        submittingLockRef.current = false;
       }
     },
     [options, updateMessages, updateMessageById, checkBackend, flushPendingContent, flushNow]
   );
 
-  /**
-   * 中断当前请求
-   */
+  /** 中断当前请求 */
   const abortRequest = useCallback((): void => {
-    // 中断 AbortController
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
       abortControllerRef.current = null;
     }
-
-    // 立即刷新待处理的内容
     flushNow();
-
-    // 重置所有加载状态
     setIsStreaming(false);
     setIsLoading(false);
 
-    // 更新消息状态为 aborted（被中断），确保 loading 停止且不参与历史
     if (streamingMsgIdRef.current) {
       const msgId = streamingMsgIdRef.current;
-      // 获取当前消息内容
       const currentMsg = messagesRef.current.find((m) => m.id === msgId);
       const currentContent = currentMsg?.content || '';
-
       updateMessageById(msgId, {
         status: 'aborted' as MessageStatus,
-        // 保留已生成的内容，若无则设置提示
         content: currentContent || '[已中断]',
       });
       streamingMsgIdRef.current = null;
     }
-
     console.log('请求已被用户中断');
   }, [updateMessageById, flushNow]);
 
-  /**
-   * 清空消息
-   */
+  /** 清空消息 */
   const clearMessages = useCallback((): void => {
     abortRequest();
     isInternalUpdateRef.current = true;
@@ -419,9 +396,7 @@ export function useStreamChat(
     setError(null);
   }, [abortRequest]);
 
-  /**
-   * 组件卸载时清理
-   */
+  /** 组件卸载时清理 */
   useEffect(() => {
     return () => {
       abortControllerRef.current?.abort();

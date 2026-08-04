@@ -72,11 +72,12 @@ export function createStreamRequest(
     },
     body: JSON.stringify(body),
     signal: abortController.signal,
-
-    onopen() {
+    // 确保流式传输的正确性
+    onopen(): Promise<void> {
       console.log('[SSE] 连接已建立');
       retryCount = 0;
       setNewTimeout();
+      return Promise.resolve();
     },
 
     onmessage(ev) {
@@ -87,7 +88,7 @@ export function createStreamRequest(
         const eventType = ev.event;
         const eventData = JSON.parse(ev.data);
 
-        console.log('[SSE] 收到事件:', eventType);
+        console.log(`[SSE] ${new Date().toISOString()} 收到事件:`, eventType);
 
         switch (eventType) {
           case 'message_start':
@@ -123,6 +124,7 @@ export function createStreamRequest(
 
       console.error('[SSE] 连接错误:', err);
 
+      // 有消息接收过则不重试（已在流式输出中）
       if (retryCount < finalConfig.retryAttempts && !hasReceivedMessage) {
         retryCount++;
         console.log(`[SSE] 准备重试 ${retryCount}/${finalConfig.retryAttempts}`);
@@ -130,16 +132,14 @@ export function createStreamRequest(
         return;
       }
 
+      // 通知上层错误，但不再 throw —— 让 fetchEventSource 内部正常收尾
       callbacks.onError?.(err instanceof Error ? err : new Error(String(err)));
-      throw err;
     },
 
     onclose() {
       clearCurrentTimeout();
       console.log('[SSE] 连接已关闭');
     },
-
-    reconnectionTime: finalConfig.retryDelay,
   });
 
   return abortController;

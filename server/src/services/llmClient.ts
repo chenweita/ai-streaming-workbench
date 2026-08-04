@@ -55,7 +55,8 @@ export class LLMClient {
       max_tokens: options?.maxTokens,
     };
 
-    console.log('[LLM] 发送请求到:', `${this.apiBaseUrl}/chat/completions`);
+    const startTime = performance.now();
+    console.log(`[LLM] ${new Date().toISOString()} 发送请求到:`, `${this.apiBaseUrl}/chat/completions`);
     console.log('[LLM] 使用模型:', requestBody.model);
     console.log('[LLM] 消息数量:', messages.length);
     console.log('[LLM] API Key 前20字符:', this.apiKey.substring(0, 20) + '...');
@@ -72,8 +73,8 @@ export class LLMClient {
         signal: this.abortController.signal,
       });
 
-      console.log('[LLM] 响应状态:', response.status, response.ok);
-
+      console.log(`[LLM] ${new Date().toISOString()} 响应状态:`, response.status, response.ok);
+      console.log(`[LLM] 响应耗时: ${performance.now() - startTime}ms`);
       if (!response.ok) {
         const errorBody = await response.text();
         console.error('[LLM] API错误响应:', errorBody);
@@ -120,6 +121,7 @@ export class LLMClient {
     body: ReadableStream<Uint8Array>,
     callbacks: StreamCallbacks
   ): Promise<void> {
+    const streamStartTs = performance.now();
     const reader = body.getReader();
     const decoder = new TextDecoder('utf-8');
     let buffer = '';
@@ -167,8 +169,11 @@ export class LLMClient {
 
               const delta = this.extractDelta(jsonData);
 
-              if (delta) {
+          if (delta) {
                 fullContent += delta;
+                if (fullContent.length <= 10) {
+                  console.log(`[LLM] ${new Date().toISOString()} 首字到达 (累计${fullContent.length}字)`);
+                }
                 callbacks.onDelta(delta);
               }
 
@@ -215,6 +220,7 @@ export class LLMClient {
 
       // 只有没有出错才调用 onDone
       if (!hasError) {
+        console.log(`[LLM] ${new Date().toISOString()} 流式解析完成，耗时=${performance.now() - streamStartTs}ms`);
         callbacks.onDone();
       }
     } catch (error) {

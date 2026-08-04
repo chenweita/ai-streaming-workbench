@@ -22,7 +22,7 @@ function convertMessagesToLLMFormat(messages: ChatMessage[]): Array<{
 
 /**
  * SSE响应初始化
- * 设置必要的SSE响应头
+ * 设置必要的SSE响应头，关闭 TCP Nagle 算法与 HTTP 缓冲
  */
 function initSSEResponse(res: Response): void {
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
@@ -32,6 +32,11 @@ function initSSEResponse(res: Response): void {
   res.setHeader('X-Accel-Buffering', 'no');
   res.setHeader('Access-Control-Allow-Origin', '*');
   res.setHeader('Access-Control-Allow-Credentials', 'true');
+  // 关闭 TCP Nagle 算法，禁用小包合并延迟
+  const rawSocket: unknown = res.socket;
+  if (rawSocket && typeof (rawSocket as { setNoDelay?: (noDelay?: boolean) => void }).setNoDelay === 'function') {
+    (rawSocket as { setNoDelay: (noDelay?: boolean) => void }).setNoDelay(true);
+  }
   // 立即刷新响应头
   res.flushHeaders();
 }
@@ -40,7 +45,6 @@ function initSSEResponse(res: Response): void {
  * 写入SSE事件
  */
 function writeSSEEvent(res: Response, type: SSEEventType, data: unknown): void {
-  const event = { type, data };
   res.write(`event: ${type}\n`);
   res.write(`data: ${JSON.stringify(data)}\n\n`);
 }
@@ -81,6 +85,8 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
 
     // 发送开始事件
     const assistantMessageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
+    const streamStartTs = Date.now();
+    console.log(`[SSE] ${new Date().toISOString()} 开始流: requestId=${requestId}`);
     writeSSEEvent(res, 'message_start', {
       messageId: assistantMessageId,
     });
@@ -96,6 +102,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
           writeSSEEvent(res, 'message_delta', { content });
         },
         onDone: (usage) => {
+          console.log(`[SSE] ${new Date().toISOString()} 流结束: requestId=${requestId} 耗时=${Date.now() - streamStartTs}ms`);
           writeSSEEvent(res, 'message_end', {
             messageId: assistantMessageId,
             usage,
