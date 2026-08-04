@@ -29,14 +29,42 @@ const activeGates = new Map<string, PermissionGate>();
 /**
  * 将内部 ChatMessage 转换为 LLM 消息格式
  * 仅保留 user/assistant/system 角色，丢弃 tool 角色（由 AgentLoop 内部管理）
+ *
+ * 关键策略（非常重要）：
+ *   当对话末尾出现"连续多条 user 消息且中间没有 assistant 回复"时，
+ *   只保留【最新一条】user 消息作为 LLM 的回答目标，
+ *   其余较旧的 user 消息仅作为"历史上下文"附加在前面，避免 LLM
+ *   把注意力放在旧问题上而忽略最新问题。
+ *
+ *   举例：
+ *     [user("总结vue"), assistant("vue答案"), user("总结react")]
+ *     → 原样保留：vue 只是上下文背景，react 才是本次要回答的问题
+ *
+ *     [user("总结vue"), user("总结react")]  （用户连发两条，AI 还没回第一条）
+ *     → 只保留 user("总结react")，丢弃 user("总结vue")
+ *       因为用户在连发时，最后一条才是他真正想要的答案
  */
 function convertMessagesToLLMFormat(messages: ChatMessage[]): LLMMessage[] {
-  return messages
-    .filter((msg) => msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system')
-    .map((msg) => ({
-      role: msg.role,
-      content: msg.content,
-    }));
+  const filtered = messages.filter(
+    (msg) => msg.role === 'user' || msg.role === 'assistant' || msg.role === 'system'
+  );
+
+  const result: LLMMessage[] = [];
+
+  for (const msg of filtered) {
+    if (msg.role === 'user') {
+      // 如果上一条消息也是 user（说明用户连发），丢弃上一条 user，只保留最新的
+      const last = result[result.length - 1];
+      if (last && last.role === 'user') {
+        result.pop();
+      }
+      result.push({ role: 'user', content: msg.content });
+    } else {
+      result.push({ role: msg.role, content: msg.content });
+    }
+  }
+
+  return result;
 }
 
 /**
@@ -85,7 +113,13 @@ const AGENT_SYSTEM_PROMPT = `你是一个能力强大的 AI 助手，可以使�
 路径确认规则（重要）：
 - 当用户指定的路径不存在时（如 list_files / read_file 返回"目录不存在"或"文件不存在"），必须先向用户确认正确路径，禁止自行假设路径并直接调用 write_file / edit_file
 - 例如：用户说"在 src 下创建文件"但 src 目录不存在，你应该先问"根目录下没有 src 目录，你是指 client/src/ 还是 server/src/？"，而不是直接在根目录创建文件
-- 不确定用户意图时，宁可多问一句，也不要猜测路径并执行写入操作`;
+- 不确定用户意图时，宁可多问一句，也不要猜测路径并执行写入操作
+
+⚠️ 对话回答规则（必须严格遵守）：
+- 【最重要】你只需要回答"最后一条用户消息"提出的问题
+- 历史对话中较旧的用户消息和 AI 回答，仅用于理解上下文，绝对不要再重复回答
+- 例如：如果用户先问了 Vue，再问了 React，你只需要回答 React 的问题，不要提 Vue 的任何内容
+- 不要罗列历史已回答过的内容，聚焦最新问题给出答案`;
 
 /**
  * SSE响应初始化

@@ -212,6 +212,16 @@ export function useStreamChat(
     async (content: string, conversationIdOverride?: string): Promise<void> => {
       if (submittingLockRef.current) {
         console.warn('消息正在提交中，请稍候...');
+        const blockedMsg: ChatMessage = {
+          id: generateId('msg'),
+          role: 'user',
+          content: `[消息被阻塞，AI 正在回复中，请稍后重试] ${content.trim()}`,
+          createdAt: Date.now(),
+          status: 'error',
+        };
+        isInternalUpdateRef.current = true;
+        setMessages((prev) => [...prev, blockedMsg]);
+        setError(new Error('AI 正在回复中，请稍候再发送消息'));
         return;
       }
       if (!content.trim()) {
