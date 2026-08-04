@@ -28,7 +28,12 @@ import { writeFileTool } from './builtin/writeFile.tool';
 import { editFileTool } from './builtin/editFile.tool';
 import { createSaveMemoryTool } from './builtin/saveMemory.tool';
 import { createDeleteMemoryTool } from './builtin/deleteMemory.tool';
+import { createCreateSkillTool } from './builtin/createSkill.tool';
+import { createListSkillsTool } from './builtin/listSkills.tool';
+import { createExecuteSkillTool } from './builtin/executeSkill.tool';
+import { createEvolveSkillTool } from './builtin/evolveSkill.tool';
 import { CompositeMemoryStore } from '../memory/CompositeMemoryStore';
+import { SkillStore } from '../skill/SkillStore';
 
 /**
  * 注册表内部存储的工具契约类型
@@ -126,8 +131,12 @@ export class ToolRegistry {
 /**
  * 创建默认工具注册表（预装内置工具）
  * @param memoryStore 组合记忆存储实例（可选，用于创建记忆工具）
+ * @param skillStore 技能存储实例（可选，用于创建技能工具）
  */
-export function createDefaultRegistry(memoryStore?: CompositeMemoryStore): ToolRegistry {
+export function createDefaultRegistry(
+  memoryStore?: CompositeMemoryStore,
+  skillStore?: SkillStore
+): ToolRegistry {
   const registry = new ToolRegistry();
   // 具体工具的 TParams 为具体接口，注册表统一存储为 Record<string, unknown>
   // 此处断言是安全的：Executor 运行时传入的 params 来自 JSON.parse，本身就是 Record
@@ -144,6 +153,16 @@ export function createDefaultRegistry(memoryStore?: CompositeMemoryStore): ToolR
     tools.push(
       createSaveMemoryTool(memoryStore) as unknown as ToolDef<Record<string, unknown>, string>,
       createDeleteMemoryTool(memoryStore) as unknown as ToolDef<Record<string, unknown>, string>
+    );
+  }
+
+  // 如果注入了技能存储，注册技能工具
+  if (skillStore) {
+    tools.push(
+      createCreateSkillTool(skillStore) as unknown as ToolDef<Record<string, unknown>, string>,
+      createListSkillsTool(skillStore) as unknown as ToolDef<Record<string, unknown>, string>,
+      createExecuteSkillTool(skillStore) as unknown as ToolDef<Record<string, unknown>, string>,
+      createEvolveSkillTool(skillStore) as unknown as ToolDef<Record<string, unknown>, string>
     );
   }
 

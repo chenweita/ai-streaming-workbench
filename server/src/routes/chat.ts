@@ -14,6 +14,7 @@ import { PermissionMode } from '../agent/config';
 import { PermissionGate } from '../agent/permission/PermissionGate';
 import { MemoryStore } from '../agent/memory/MemoryStore';
 import { CompositeMemoryStore } from '../agent/memory/CompositeMemoryStore';
+import { SkillStore } from '../agent/skill/SkillStore';
 
 const router = Router();
 
@@ -50,23 +51,30 @@ const AGENT_SYSTEM_PROMPT = `你是一个能力强大的 AI 助手，可以使�
 - edit_file: 通过旧字符串替换为新字符串，局部编辑文件（编辑，需用户授权）
 - save_memory: 将重要信息保存到长期记忆中，跨会话保留（编辑，需用户授权）
 - delete_memory: 删除指定的长期记忆（编辑，需用户授权）
+- create_skill: 创建自定义技能，封装可复用的代码逻辑（编辑，需用户授权）
+- list_skills: 列出所有已创建的技能（只读）
+- execute_skill: 执行已创建的技能（编辑，需用户授权）
+- evolve_skill: 技能进化，生成新版本并记录变更历史（编辑，需用户授权）
 
 使用原则：
 1. 当用户询问项目结构、文件内容、代码位置时，主动调用只读工具获取信息，不要凭空猜测
 2. 当用户要求创建、修改文件时，使用 write_file 或 edit_file。这些操作会触发用户授权确认，被拒绝时应告知用户并停止
 3. 当用户要求"记住"、"记下来"某条信息（如偏好、约定、重要信息）时，使用 save_memory 保存
 4. 当用户要求"忘记"、"删除"某条记忆时，使用 delete_memory
-5. 工具调用后，基于真实结果给出回答
-6. 普通对话问题（如知识问答、文本生成）直接回答，无需调用工具
-7. 工具调用失败时，告知用户失败原因，不要编造结果
-8. edit_file 的 oldString 必须能唯一匹配文件内容，提供足够长的上下文避免歧义
+5. 当用户要求创建可复用的代码逻辑、自动化流程时，使用 create_skill 创建技能
+6. 当用户要求执行某个已创建的技能时，使用 execute_skill
+7. 当用户要求优化某个技能时，使用 evolve_skill 生成新版本
+8. 工具调用后，基于真实结果给出回答
+9. 普通对话问题（如知识问答、文本生成）直接回答，无需调用工具
+10. 工具调用失败时，告知用户失败原因，不要编造结果
+11. edit_file 的 oldString 必须能唯一匹配文件内容，提供足够长的上下文避免歧义
 
 ⚠️ 重要：关于用户拒绝授权
 - 如果用户拒绝了 save_memory 或 delete_memory 的授权，你必须：
   1. 立即停止调用任何记忆相关工具，不要重试
   2. 告知用户"已取消记忆操作，本次不会保存相关信息"
   3. 可以继续回答用户的其他问题，但不要再尝试记忆操作
-- 同样的规则适用于 write_file / edit_file 等所有被拒绝的编辑工具
+- 同样的规则适用于 write_file / edit_file / create_skill / execute_skill / evolve_skill 等所有被拒绝的编辑工具
 
 路径确认规则（重要）：
 - 当用户指定的路径不存在时（如 list_files / read_file 返回"目录不存在"或"文件不存在"），必须先向用户确认正确路径，禁止自行假设路径并直接调用 write_file / edit_file
@@ -156,6 +164,10 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
     // 组合记忆存储：自动路由 user_preference → 全局，其他 → 项目
     const compositeMemory = new CompositeMemoryStore(globalMemoryStore, projectMemoryStore);
 
+    // 初始化技能存储：~/.trae-cn/skills/
+    const skillStore = new SkillStore();
+    console.log(`[Chat] 技能存储: 已有 ${skillStore.size()} 个技能`);
+
     // 合并记忆摘要注入系统提示词
     const globalSummary = globalMemoryStore.buildMemorySummary();
     const projectSummary = projectMemoryStore.buildMemorySummary();
@@ -165,7 +177,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       : AGENT_SYSTEM_PROMPT;
 
     const llmClient = createLLMClient();
-    const registry = createDefaultRegistry(compositeMemory);
+    const registry = createDefaultRegistry(compositeMemory, skillStore);
     const executor = new ToolExecutor(registry, projectRoot);
 
     // 权限网关：onPending 在挂起前同步触发，发 SSE permission_request 到前端
