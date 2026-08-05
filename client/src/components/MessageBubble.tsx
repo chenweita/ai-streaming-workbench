@@ -14,6 +14,7 @@ import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vs } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ChatMessage, MessageStatus } from '../types';
 import { ToolCallList } from './ToolCallCard';
+import { CodeLintPanel } from './CodeLintPanel';
 import { formatTimestamp } from '../utils/helpers';
 
 interface MessageBubbleProps {
@@ -98,6 +99,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             />
           )}
         </div>
+
+        {/* 代码检测与修复面板（仅 AI 消息且流式结束后展示） */}
+        {!isUser && !isStreaming && message.content && (
+          <CodeLintPanel content={message.content} isStreaming={isStreaming} />
+        )}
 
         {/* Token使用量显示 */}
         {message.usage && (

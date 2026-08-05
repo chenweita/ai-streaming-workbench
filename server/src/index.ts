@@ -3,6 +3,7 @@ import cors from 'cors';
 import { config, validateConfig } from './config';
 import { streamTimeoutMiddleware, requestLogger, errorHandler } from './middleware';
 import chatRouter from './routes/chat';
+import lintRouter from './routes/lint';
 
 /**
  * Express应用初始化
@@ -45,6 +46,7 @@ app.use('/api/chat/stream', streamTimeoutMiddleware);
 
 // API路由
 app.use('/api', chatRouter);
+app.use('/api', lintRouter);
 
 // 错误处理
 app.use(errorHandler);
