@@ -13,6 +13,7 @@ import rehypeHighlight from 'rehype-highlight';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { vs } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { ChatMessage, MessageStatus } from '../types';
+import { ToolCallList } from './ToolCallCard';
 import { formatTimestamp } from '../utils/helpers';
 
 interface MessageBubbleProps {
@@ -73,6 +74,11 @@ export const MessageBubble: React.FC<MessageBubbleProps> = ({
             <span className="text-yellow-500">已中断</span>
           )}
         </div>
+
+        {/* 工具调用卡片（Agent 模式下展示） */}
+        {!isUser && message.toolCalls && message.toolCalls.length > 0 && (
+          <ToolCallList toolCalls={message.toolCalls} />
+        )}
 
         {/* 消息内容 - Markdown或纯文本 */}
         <div

@@ -32,13 +32,31 @@ export interface StreamChatRequest {
   maxTokens?: number;
 }
 
-/** SSE事件类型 */
+/** SSE事件类型（扩展支持工具调用事件） */
 export type SSEEventType =
   | 'message_start'
   | 'message_delta'
   | 'message_end'
+  | 'tool_call_start'
+  | 'tool_result'
   | 'error'
   | 'done';
+
+/** 工具调用开始事件数据 */
+export interface SSEToolCallStart {
+  toolCallId: string;
+  toolName: string;
+  arguments: string;
+}
+
+/** 工具执行结果事件数据 */
+export interface SSEToolResult {
+  toolCallId: string;
+  toolName: string;
+  ok: boolean;
+  content: string;
+  durationMs: number;
+}
 
 /** SSE事件结构 */
 export interface SSEEvent {

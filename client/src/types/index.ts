@@ -18,6 +18,8 @@ export interface ChatMessage {
   status?: MessageStatus;
   /** 消息使用的Token数量 */
   usage?: TokenUsage;
+  /** 工具调用记录列表（Agent 模式下使用） */
+  toolCalls?: ToolCallRecord[];
 }
 
 /** Token使用量 */
@@ -45,13 +47,46 @@ export interface StreamChatParams {
   maxTokens?: number;
 }
 
-/** SSE事件类型 */
+/** SSE事件类型（扩展支持工具调用事件） */
 export type SSEEventType =
   | 'message_start'
   | 'message_delta'
   | 'message_end'
+  | 'tool_call_start'
+  | 'tool_result'
   | 'error'
   | 'done';
+
+/** 工具调用状态 */
+export type ToolCallStatus = 'pending' | 'running' | 'completed' | 'error';
+
+/** 工具调用记录（存储在 ChatMessage.toolCalls 中） */
+export interface ToolCallRecord {
+  toolCallId: string;
+  toolName: string;
+  arguments: string;
+  status: ToolCallStatus;
+  result?: string;
+  durationMs?: number;
+  /** 结果是否被截断（超过 200 字符时截断显示） */
+  truncated?: boolean;
+}
+
+/** 工具调用开始事件数据 */
+export interface ToolCallStartData {
+  toolCallId: string;
+  toolName: string;
+  arguments: string;
+}
+
+/** 工具执行结果事件数据 */
+export interface ToolResultData {
+  toolCallId: string;
+  toolName: string;
+  ok: boolean;
+  content: string;
+  durationMs: number;
+}
 
 /** SSE事件结构 */
 export interface SSEEvent {
@@ -73,6 +108,10 @@ export interface MessageDeltaData {
 export interface MessageEndData {
   messageId: string;
   usage?: TokenUsage;
+  /** Agent 模式：总迭代轮次 */
+  iterations?: number;
+  /** Agent 模式：是否达到最大轮次 */
+  maxReached?: boolean;
 }
 
 /** 完成事件数据 */

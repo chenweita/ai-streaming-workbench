@@ -15,6 +15,8 @@ import {
   MessageStatus,
   StreamChatParams,
   UseStreamChatReturn,
+  ToolCallRecord,
+  ToolCallStatus,
 } from '../types';
 import { createStreamRequest, StreamCallbacks } from '../services/apiClient';
 import { createMockStreamRequest } from '../services/mockApi';
@@ -56,6 +58,8 @@ export function useStreamChat(
   const backendAvailableRef = useRef<boolean | null>(null);
   // 流式输出缓存（用于批量更新）
   const pendingContentRef = useRef<string>('');
+  // 工具调用记录缓存（当前消息的所有工具调用）
+  const toolCallsRef = useRef<ToolCallRecord[]>([]);
   const flushTimerRef = useRef<number | null>(null);
   // 外部消息同步锁（防止循环更新）
   const isInternalUpdateRef = useRef<boolean>(false);
@@ -220,6 +224,7 @@ export function useStreamChat(
 
         const assistantMessageId = generateId('msg');
         streamingMsgIdRef.current = assistantMessageId;
+        toolCallsRef.current = [];
 
         const assistantMessage: ChatMessage = {
           id: assistantMessageId,
@@ -227,6 +232,7 @@ export function useStreamChat(
           content: '',
           createdAt: Date.now(),
           status: 'pending',
+          toolCalls: [],
         };
 
         const newMessages = [...messagesRef.current, userMessage, assistantMessage];
@@ -293,11 +299,68 @@ export function useStreamChat(
           onMessageEnd: (data) => {
             flushNow();
             setIsStreaming(false);
+            const finalToolCalls = toolCallsRef.current.length > 0 ? [...toolCallsRef.current] : undefined;
             if (data.messageId) {
               updateMessageById(data.messageId, {
                 status: 'completed',
                 usage: data.usage,
+                toolCalls: finalToolCalls,
               });
+            }
+          },
+
+          onToolCallStart: (data) => {
+            const newRecord: ToolCallRecord = {
+              toolCallId: data.toolCallId,
+              toolName: data.toolName,
+              arguments: data.arguments,
+              status: 'running' as ToolCallStatus,
+            };
+            toolCallsRef.current = [...toolCallsRef.current, newRecord];
+
+            // 实时更新当前消息的 toolCalls
+            if (streamingMsgIdRef.current) {
+              const msgId = streamingMsgIdRef.current;
+              const currentToolCalls = [...toolCallsRef.current];
+              isInternalUpdateRef.current = true;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === msgId
+                    ? { ...msg, toolCalls: currentToolCalls }
+                    : msg
+                )
+              );
+            }
+          },
+
+          onToolResult: (data) => {
+            const resultContent = data.content;
+            const truncated = resultContent.length > 200;
+
+            toolCallsRef.current = toolCallsRef.current.map((tc) =>
+              tc.toolCallId === data.toolCallId
+                ? {
+                    ...tc,
+                    status: data.ok ? ('completed' as ToolCallStatus) : ('error' as ToolCallStatus),
+                    result: resultContent,
+                    durationMs: data.durationMs,
+                    truncated,
+                  }
+                : tc
+            );
+
+            // 实时更新当前消息的 toolCalls
+            if (streamingMsgIdRef.current) {
+              const msgId = streamingMsgIdRef.current;
+              const currentToolCalls = [...toolCallsRef.current];
+              isInternalUpdateRef.current = true;
+              setMessages((prev) =>
+                prev.map((msg) =>
+                  msg.id === msgId
+                    ? { ...msg, toolCalls: currentToolCalls }
+                    : msg
+                )
+              );
             }
           },
 
@@ -306,6 +369,7 @@ export function useStreamChat(
             setIsStreaming(false);
             setIsLoading(false);
             streamingMsgIdRef.current = null;
+            toolCallsRef.current = [];
           },
 
           onError: (err) => {

@@ -17,11 +17,16 @@ const DEFAULT_CONFIG: ApiConfig = {
 
 /**
  * SSE事件回调接口
+ * 扩展支持 Agent 工具调用事件
  */
 export interface StreamCallbacks {
   onMessageStart?: (data: { messageId: string }) => void;
   onMessageDelta?: (data: { content: string }) => void;
-  onMessageEnd?: (data: { messageId: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }) => void;
+  onMessageEnd?: (data: { messageId: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number }; iterations?: number; maxReached?: boolean }) => void;
+  /** 工具调用开始事件 */
+  onToolCallStart?: (data: { toolCallId: string; toolName: string; arguments: string }) => void;
+  /** 工具执行结果事件 */
+  onToolResult?: (data: { toolCallId: string; toolName: string; ok: boolean; content: string; durationMs: number }) => void;
   onDone?: (data: { conversationId: string }) => void;
   onError?: (error: Error) => void;
 }
@@ -98,7 +103,13 @@ export function createStreamRequest(
             callbacks.onMessageDelta?.(eventData as { content: string });
             break;
           case 'message_end':
-            callbacks.onMessageEnd?.(eventData as { messageId: string });
+            callbacks.onMessageEnd?.(eventData as { messageId: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number }; iterations?: number; maxReached?: boolean });
+            break;
+          case 'tool_call_start':
+            callbacks.onToolCallStart?.(eventData as { toolCallId: string; toolName: string; arguments: string });
+            break;
+          case 'tool_result':
+            callbacks.onToolResult?.(eventData as { toolCallId: string; toolName: string; ok: boolean; content: string; durationMs: number });
             break;
           case 'done':
             callbacks.onDone?.(eventData as { conversationId: string });
