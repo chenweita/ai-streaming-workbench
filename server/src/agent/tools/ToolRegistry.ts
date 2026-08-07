@@ -24,6 +24,8 @@ import {
 import { listFilesTool } from './builtin/listFiles.tool';
 import { readFileTool } from './builtin/readFile.tool';
 import { grepSearchTool } from './builtin/grepSearch.tool';
+import { writeFileTool } from './builtin/writeFile.tool';
+import { editFileTool } from './builtin/editFile.tool';
 
 /**
  * 注册表内部存储的工具契约类型
@@ -120,7 +122,9 @@ export class ToolRegistry {
 
 /**
  * 创建默认工具注册表（预装内置工具）
- * 包含：list_files、read_file、grep_search
+ * 包含：
+ *   - 只读工具：list_files、read_file、grep_search（自动放行，可并发）
+ *   - 编辑工具：write_file、edit_file（需权限确认，串行执行）
  *
  * 注册时将具体泛型工具断言为注册表契约类型，
  * 这是注册表模式的常见做法，运行时参数由 Executor 传递。
@@ -133,6 +137,8 @@ export function createDefaultRegistry(): ToolRegistry {
     listFilesTool as unknown as ToolDef<Record<string, unknown>, string>,
     readFileTool as unknown as ToolDef<Record<string, unknown>, string>,
     grepSearchTool as unknown as ToolDef<Record<string, unknown>, string>,
+    writeFileTool as unknown as ToolDef<Record<string, unknown>, string>,
+    editFileTool as unknown as ToolDef<Record<string, unknown>, string>,
   ]);
   return registry;
 }

@@ -20,6 +20,8 @@ const TOOL_NAME_LABELS: Record<string, string> = {
   list_files: '列出文件',
   read_file: '读取文件',
   grep_search: '搜索代码',
+  write_file: '写入文件',
+  edit_file: '编辑文件',
 };
 
 /** 工具名图标映射 */
@@ -27,6 +29,8 @@ const TOOL_ICONS: Record<string, string> = {
   list_files: '📁',
   read_file: '📄',
   grep_search: '🔍',
+  write_file: '✏️',
+  edit_file: '✏️',
 };
 
 /**

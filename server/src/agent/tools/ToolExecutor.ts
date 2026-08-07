@@ -21,6 +21,7 @@ import {
   ToolExecutionResult,
   ToolSafety,
   LLMToolCall,
+  PermissionChecker,
 } from './ToolProtocol';
 
 /** 默认工具执行超时（毫秒） */
@@ -33,8 +34,18 @@ export class ToolExecutor {
   constructor(
     private readonly registry: ToolRegistry,
     /** 默认工作目录（工具相对路径基准） */
-    private readonly cwd: string
+    private readonly cwd: string,
+    /** 权限检查器（仅对 Edit 类工具生效，由 AgentLoop 注入） */
+    private permissionChecker?: PermissionChecker
   ) {}
+
+  /**
+   * 运行时设置权限检查器
+   * AgentLoop 在 run() 时根据 PermissionMode + PermissionGate 构造 checker 后注入
+   */
+  setPermissionChecker(checker: PermissionChecker): void {
+    this.permissionChecker = checker;
+  }
 
   /**
    * 执行单个工具调用
@@ -84,7 +95,34 @@ export class ToolExecutor {
       };
     }
 
-    // 3. 构建执行上下文（含超时控制）
+    // 3. 权限检查（仅对 Edit 类工具）
+    //    必须在构建 AbortController 之前调用：权限等待时间不计入 30s 执行超时，
+    //    避免用户思考导致工具未执行就超时。
+    if (tool.safety === ToolSafety.Edit && this.permissionChecker) {
+      try {
+        const decision = await this.permissionChecker(toolCall, tool);
+        if (!decision.approved) {
+          return {
+            toolName,
+            toolCallId,
+            ok: false,
+            content: `用户拒绝授权：${decision.reason || '用户取消'}`,
+            durationMs: Math.round(performance.now() - startTs),
+          };
+        }
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return {
+          toolName,
+          toolCallId,
+          ok: false,
+          content: `权限检查异常：${msg}`,
+          durationMs: Math.round(performance.now() - startTs),
+        };
+      }
+    }
+
+    // 4. 构建执行上下文（含超时控制）
     const controller = new AbortController();
     const timeoutMs = DEFAULT_TIMEOUT_MS;
     const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
@@ -104,7 +142,7 @@ export class ToolExecutor {
       timeoutMs,
     };
 
-    // 4. 执行工具（带异常捕获）
+    // 5. 执行工具（带异常捕获）
     try {
       const result = await this.executeWithTimeout(tool, params, context, controller);
       clearTimeout(timeoutId);
@@ -169,8 +207,9 @@ export class ToolExecutor {
    *
    * 策略：
    *   - 只读工具（safety=ReadOnly）可并发
-   *   - 有副作用工具（safety=SideEffect）串行执行
-   *   - 混合场景：先并发执行所有只读工具，再串行执行副作用工具
+   *   - 编辑工具（safety=Edit）严格串行执行，且后一个等待前一个完成（含权限确认）
+   *     契约：前端 pendingPermission 为单态，同时至多一个权限弹窗，依赖此处串行保证
+   *   - 混合场景：先并发执行所有只读工具，再串行执行编辑工具
    *
    * @param toolCalls LLM 返回的工具调用列表
    * @param parentSignal 父级中断信号
@@ -183,16 +222,16 @@ export class ToolExecutor {
       return [];
     }
 
-    // 分组：只读工具 vs 副作用工具
+    // 分组：只读工具 vs 编辑工具
     const readOnlyCalls: LLMToolCall[] = [];
-    const sideEffectCalls: LLMToolCall[] = [];
+    const editCalls: LLMToolCall[] = [];
 
     for (const call of toolCalls) {
       const tool = this.registry.get(call.name);
       if (tool && tool.safety === ToolSafety.ReadOnly) {
         readOnlyCalls.push(call);
       } else {
-        sideEffectCalls.push(call);
+        editCalls.push(call);
       }
     }
 
@@ -206,11 +245,11 @@ export class ToolExecutor {
       results.push(...readOnlyResults);
     }
 
-    // 2. 串行执行副作用工具
-    for (const call of sideEffectCalls) {
+    // 2. 串行执行编辑工具（含权限确认，严格串行）
+    for (const call of editCalls) {
       const result = await this.execute(call, parentSignal);
       results.push(result);
-      // 串行执行中如果某个工具失败，继续执行后续工具（不中断批次）
+      // 串行执行中如果某个工具失败/被拒绝，继续执行后续工具（不中断批次）
     }
 
     return results;

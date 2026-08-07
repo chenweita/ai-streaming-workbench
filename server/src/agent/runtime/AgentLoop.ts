@@ -26,8 +26,10 @@ import {
   LLMToolCall,
   ToolExecutionResult,
   OpenAIToolFunction,
+  PermissionChecker,
 } from '../tools/ToolProtocol';
 import { PermissionMode } from '../config';
+import { PermissionGate, PermissionRequestPayload } from '../permission/PermissionGate';
 
 /**
  * AgentLoop 回调接口
@@ -40,6 +42,8 @@ export interface AgentLoopCallbacks {
   onToolCallStart: (toolCall: LLMToolCall) => void;
   /** 工具执行完成（含结果） */
   onToolResult: (result: ToolExecutionResult) => void;
+  /** 权限请求（编辑类工具执行前触发，前端弹出确认框） */
+  onPermissionRequest?: (req: PermissionRequestPayload) => void;
   /** 循环结束（正常完成或达到最大轮次） */
   onDone: (info: { iterations: number; finalAnswer: string; maxReached: boolean }) => void;
   /** 不可恢复错误 */
@@ -77,7 +81,9 @@ export class AgentLoop {
     private readonly llmClient: LLMClient,
     private readonly registry: ToolRegistry,
     private readonly executor: ToolExecutor,
-    private readonly config: AgentLoopConfig
+    private readonly config: AgentLoopConfig,
+    /** 权限网关（处理 Edit 类工具的 Suspend/Resume，由 chat.ts 注入） */
+    private readonly permissionGate?: PermissionGate
   ) {}
 
   /**
@@ -96,6 +102,10 @@ export class AgentLoop {
       { role: 'system', content: systemPrompt },
       ...userMessages,
     ];
+
+    // 装配权限检查器并注入 executor
+    // 必须在 run() 内构造：依赖 config.permission / permissionGate / abortController
+    this.executor.setPermissionChecker(this.buildPermissionChecker());
 
     const openaiTools: OpenAIToolFunction[] = this.registry.toOpenAITools();
 
@@ -213,6 +223,55 @@ export class AgentLoop {
         }
       );
     });
+  }
+
+  /**
+   * 构造权限检查器
+   *
+   * 决策策略（对标 BearCode PermissionMode）：
+   *   - BypassPermissions / AcceptEdits → 直接放行（向后兼容，不弹窗）
+   *   - Plan / DontAsk → 直接拒绝（只读规划模式，静默拦截编辑）
+   *   - Default → 走 PermissionGate，发 SSE 请求前端弹窗，挂起等待用户决策
+   *
+   * 权限状态单次有效：每次 Edit 工具调用都触发一次独立的 gate.request，
+   * 不缓存授权结果。
+   */
+  private buildPermissionChecker(): PermissionChecker {
+    return async (toolCall, _tool): Promise<{ approved: boolean; reason?: string }> => {
+      // 1. 按 PermissionMode 短路（无需弹窗的模式）
+      if (
+        this.config.permission === PermissionMode.BypassPermissions ||
+        this.config.permission === PermissionMode.AcceptEdits
+      ) {
+        return { approved: true };
+      }
+      if (
+        this.config.permission === PermissionMode.Plan ||
+        this.config.permission === PermissionMode.DontAsk
+      ) {
+        return { approved: false, reason: `当前权限模式（${this.config.permission}）不允许编辑操作` };
+      }
+
+      // 2. Default 模式：走 PermissionGate 挂起等待用户决策
+      //    SSE permission_request 由 gate.onPending 回调发出（chat.ts 装配时注入）
+      if (!this.permissionGate) {
+        // 未注入 gate 时安全起见拒绝
+        return { approved: false, reason: '权限网关未初始化' };
+      }
+
+      console.log(`[AgentLoop] 请求权限: ${toolCall.name}(${toolCall.arguments})`);
+      // gate.request 内部同步触发 onPending（发 SSE），随后挂起等待 resolve
+      const decision = await this.permissionGate.request(
+        {
+          permissionId: toolCall.id,
+          toolName: toolCall.name,
+          toolCallId: toolCall.id,
+          arguments: toolCall.arguments,
+        },
+        this.abortController.signal
+      );
+      return decision;
+    };
   }
 
   /**

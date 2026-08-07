@@ -4,6 +4,7 @@
  * 用于开发测试和演示
  */
 import { StreamChatParams } from '../types';
+import { StreamCallbacks } from './apiClient';
 import { generateId } from '../utils/helpers';
 
 /**
@@ -137,13 +138,7 @@ function selectMockResponse(params: StreamChatParams): string {
 export function createMockStreamRequest(
   url: string,
   body: StreamChatParams,
-  callbacks: {
-    onMessageStart?: (data: { messageId: string }) => void;
-    onMessageDelta?: (data: { content: string }) => void;
-    onMessageEnd?: (data: { messageId: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number } }) => void;
-    onDone?: (data: { conversationId: string }) => void;
-    onError?: (error: Error) => void;
-  }
+  callbacks: StreamCallbacks
 ): AbortController {
   const abortController = new AbortController();
   const assistantMessageId = generateId('msg');
@@ -161,7 +156,7 @@ export function createMockStreamRequest(
   setTimeout(() => {
     if (abortController.signal.aborted) return;
 
-    callbacks.onMessageStart?.({ messageId: assistantMessageId });
+    callbacks.onMessageStart?.({ messageId: assistantMessageId, requestId });
 
     // 逐字输出模拟
     let index = 0;

@@ -57,13 +57,13 @@ export interface ToolParametersSchema {
 /**
  * 工具安全级别
  * - ReadOnly      只读无副作用，可并发执行（如 list_files、read_file、grep_search）
- * - SideEffect    有副作用，需串行执行并可能需要权限确认（如 write_file、run_shell）
+ * - Edit          文件编辑/写入/删除类，需串行执行并触发权限确认（如 write_file、edit_file）
  */
 export enum ToolSafety {
   /** 只读无副作用，并发安全 */
   ReadOnly = 'readOnly',
-  /** 有副作用，需串行执行 */
-  SideEffect = 'sideEffect',
+  /** 文件编辑类，需串行执行并触发权限确认 */
+  Edit = 'edit',
 }
 
 /* -------------------------------------------------------------------------- */
@@ -186,3 +186,32 @@ export interface LLMToolCall {
   /** 参数（JSON 字符串，需解析） */
   arguments: string;
 }
+
+/* -------------------------------------------------------------------------- */
+/*                              权限检查契约                                    */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * 权限检查结果（注入 ToolExecutor，由 AgentLoop 提供实现）
+ * - approved=true  允许执行
+ * - approved=false 拒绝执行，reason 回填给 LLM
+ */
+export interface PermissionDecision {
+  approved: boolean;
+  /** 拒绝原因（approved=false 时回填到工具结果，引导 LLM 自我修正） */
+  reason?: string;
+}
+
+/**
+ * 权限检查器契约
+ * 由 AgentLoop 实现（内部根据 PermissionMode 与 PermissionGate 决策），
+ * 注入 ToolExecutor，使执行器不直接依赖权限网关，便于测试与解耦。
+ *
+ * @param toolCall LLM 返回的工具调用
+ * @param tool 工具定义
+ * @returns 权限决策
+ */
+export type PermissionChecker = (
+  toolCall: LLMToolCall,
+  tool: ToolDef
+) => Promise<PermissionDecision>;

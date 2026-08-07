@@ -5,7 +5,7 @@
  * - 请求超时控制
  */
 import { fetchEventSource } from '@microsoft/fetch-event-source';
-import { ApiConfig, StreamChatParams } from '../types';
+import { ApiConfig, StreamChatParams, PermissionRequest, PermissionResponse } from '../types';
 
 /** 默认API配置 */
 const DEFAULT_CONFIG: ApiConfig = {
@@ -17,16 +17,18 @@ const DEFAULT_CONFIG: ApiConfig = {
 
 /**
  * SSE事件回调接口
- * 扩展支持 Agent 工具调用事件
+ * 扩展支持 Agent 工具调用事件与权限请求事件
  */
 export interface StreamCallbacks {
-  onMessageStart?: (data: { messageId: string }) => void;
+  onMessageStart?: (data: { messageId: string; requestId: string }) => void;
   onMessageDelta?: (data: { content: string }) => void;
   onMessageEnd?: (data: { messageId: string; usage?: { promptTokens: number; completionTokens: number; totalTokens: number }; iterations?: number; maxReached?: boolean }) => void;
   /** 工具调用开始事件 */
   onToolCallStart?: (data: { toolCallId: string; toolName: string; arguments: string }) => void;
   /** 工具执行结果事件 */
   onToolResult?: (data: { toolCallId: string; toolName: string; ok: boolean; content: string; durationMs: number }) => void;
+  /** 权限请求事件（编辑类工具执行前触发，前端弹出确认框） */
+  onPermissionRequest?: (data: PermissionRequest) => void;
   onDone?: (data: { conversationId: string }) => void;
   onError?: (error: Error) => void;
 }
@@ -97,7 +99,7 @@ export function createStreamRequest(
 
         switch (eventType) {
           case 'message_start':
-            callbacks.onMessageStart?.(eventData as { messageId: string });
+            callbacks.onMessageStart?.(eventData as { messageId: string; requestId: string });
             break;
           case 'message_delta':
             callbacks.onMessageDelta?.(eventData as { content: string });
@@ -110,6 +112,9 @@ export function createStreamRequest(
             break;
           case 'tool_result':
             callbacks.onToolResult?.(eventData as { toolCallId: string; toolName: string; ok: boolean; content: string; durationMs: number });
+            break;
+          case 'permission_request':
+            callbacks.onPermissionRequest?.(eventData as PermissionRequest);
             break;
           case 'done':
             callbacks.onDone?.(eventData as { conversationId: string });
@@ -174,6 +179,28 @@ export async function abortStreamRequest(requestId: string): Promise<void> {
     }
   } catch (error) {
     console.error('中断请求失败:', error);
+  }
+}
+
+/**
+ * 回传权限决策（弹窗用户点击同意/拒绝后调用）
+ * 唤醒后端挂起的 AgentLoop
+ */
+export async function respondPermissionRequest(req: PermissionResponse): Promise<void> {
+  try {
+    const response = await fetch(`${DEFAULT_CONFIG.baseURL}/chat/permission`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify(req),
+    });
+
+    if (!response.ok) {
+      throw new Error(`权限决策回传失败: ${response.status}`);
+    }
+  } catch (error) {
+    console.error('权限决策回传失败:', error);
   }
 }
 

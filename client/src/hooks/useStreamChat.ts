@@ -17,8 +17,13 @@ import {
   UseStreamChatReturn,
   ToolCallRecord,
   ToolCallStatus,
+  PermissionRequest,
 } from '../types';
-import { createStreamRequest, StreamCallbacks } from '../services/apiClient';
+import {
+  createStreamRequest,
+  StreamCallbacks,
+  respondPermissionRequest,
+} from '../services/apiClient';
 import { createMockStreamRequest } from '../services/mockApi';
 import { generateId } from '../utils/helpers';
 
@@ -45,11 +50,15 @@ export function useStreamChat(
   const [isStreaming, setIsStreaming] = useState<boolean>(false);
   // 错误信息
   const [error, setError] = useState<Error | null>(null);
+  // 当前待决策的权限请求（同时至多一个，因 Edit 工具串行执行）
+  const [pendingPermission, setPendingPermission] = useState<PermissionRequest | null>(null);
 
   // 存储当前的AbortController引用
   const abortControllerRef = useRef<AbortController | null>(null);
   // 当前流式消息ID的引用
   const streamingMsgIdRef = useRef<string | null>(null);
+  // 当前请求的 requestId（回传权限决策时需要，从 message_start 事件提取）
+  const currentRequestIdRef = useRef<string | null>(null);
   // 防止重复提交的锁
   const submittingLockRef = useRef<boolean>(false);
   // 消息引用（用于回调中获取最新消息）
@@ -60,6 +69,8 @@ export function useStreamChat(
   const pendingContentRef = useRef<string>('');
   // 工具调用记录缓存（当前消息的所有工具调用）
   const toolCallsRef = useRef<ToolCallRecord[]>([]);
+  // 权限请求引用（回调中获取最新值）
+  const pendingPermissionRef = useRef<PermissionRequest | null>(null);
   const flushTimerRef = useRef<number | null>(null);
   // 外部消息同步锁（防止循环更新）
   const isInternalUpdateRef = useRef<boolean>(false);
@@ -266,6 +277,10 @@ export function useStreamChat(
             console.log(`[Chat] ${new Date().toISOString()} 消息开始:`, data);
             setIsLoading(false);
             setIsStreaming(true);
+            // 提取 requestId（回传权限决策时需要）
+            if (data.requestId) {
+              currentRequestIdRef.current = data.requestId;
+            }
             if (
               data.messageId &&
               data.messageId !== streamingMsgIdRef.current
@@ -364,12 +379,22 @@ export function useStreamChat(
             }
           },
 
+          onPermissionRequest: (data) => {
+            console.log(`[Chat] 收到权限请求: ${data.toolName} permissionId=${data.permissionId}`);
+            pendingPermissionRef.current = data;
+            setPendingPermission(data);
+          },
+
           onDone: () => {
             flushNow();
             setIsStreaming(false);
             setIsLoading(false);
             streamingMsgIdRef.current = null;
+            currentRequestIdRef.current = null;
             toolCallsRef.current = [];
+            // 流结束清空权限状态（超时自动拒绝时后端会发 tool_result 触发 onDone）
+            pendingPermissionRef.current = null;
+            setPendingPermission(null);
           },
 
           onError: (err) => {
@@ -378,6 +403,9 @@ export function useStreamChat(
             setError(err);
             setIsStreaming(false);
             setIsLoading(false);
+            // 错误时清空权限状态
+            pendingPermissionRef.current = null;
+            setPendingPermission(null);
 
             if (streamingMsgIdRef.current) {
               const msgId = streamingMsgIdRef.current;
@@ -437,6 +465,9 @@ export function useStreamChat(
     flushNow();
     setIsStreaming(false);
     setIsLoading(false);
+    // 中断时清空权限状态
+    pendingPermissionRef.current = null;
+    setPendingPermission(null);
 
     if (streamingMsgIdRef.current) {
       const msgId = streamingMsgIdRef.current;
@@ -450,6 +481,30 @@ export function useStreamChat(
     }
     console.log('请求已被用户中断');
   }, [updateMessageById, flushNow]);
+
+  /** 回传权限决策（弹窗用户点击同意/拒绝后调用） */
+  const respondPermission = useCallback(async (approved: boolean, reason?: string): Promise<void> => {
+    const req = pendingPermissionRef.current;
+    if (!req) {
+      console.warn('[Chat] 无待决策的权限请求');
+      return;
+    }
+    // 立即清空状态，防止重复点击
+    pendingPermissionRef.current = null;
+    setPendingPermission(null);
+
+    try {
+      await respondPermissionRequest({
+        requestId: req.requestId,
+        permissionId: req.permissionId,
+        approved,
+        reason: reason || (approved ? '' : '用户拒绝'),
+      });
+      console.log(`[Chat] 权限决策已回传: approved=${approved}`);
+    } catch (e) {
+      console.error('[Chat] 权限决策回传失败:', e);
+    }
+  }, []);
 
   /** 清空消息 */
   const clearMessages = useCallback((): void => {
@@ -478,5 +533,7 @@ export function useStreamChat(
     sendMessage,
     abortRequest,
     clearMessages,
+    pendingPermission,
+    respondPermission,
   };
 }

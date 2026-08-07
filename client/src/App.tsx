@@ -14,6 +14,7 @@ import { ChatArea } from './components/ChatArea';
 import { InputBar } from './components/InputBar';
 import { NetworkBanner } from './components/NetworkBanner';
 import { ErrorToast } from './components/ErrorToast';
+import { PermissionDialog } from './components/PermissionDialog';
 import { useConversation } from './hooks/useConversation';
 import { useStreamChat } from './hooks/useStreamChat';
 import { useNetworkStatus } from './hooks/useNetworkStatus';
@@ -63,6 +64,8 @@ const App: React.FC = () => {
     sendMessage,
     abortRequest,
     clearMessages,
+    pendingPermission,
+    respondPermission,
   } = useStreamChat(currentMessages, {
     conversationId: currentConversationId || undefined,
   });
@@ -404,6 +407,14 @@ const App: React.FC = () => {
           />
         </main>
       </div>
+
+      {/* 权限确认弹窗（编辑类工具执行前触发） */}
+      {pendingPermission && (
+        <PermissionDialog
+          request={pendingPermission}
+          onRespond={respondPermission}
+        />
+      )}
     </div>
   );
 };

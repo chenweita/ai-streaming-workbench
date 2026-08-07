@@ -1,16 +1,25 @@
 import path from 'path';
 import { Router, Request, Response } from 'express';
 import { createLLMClient, LLMMessage } from '../services/llmClient';
-import { ChatMessage, SSEEventType } from '../types/shared';
+import {
+  ChatMessage,
+  SSEEventType,
+  SSEPermissionRequest,
+  PermissionResponseBody,
+} from '../types/shared';
 import { createDefaultRegistry } from '../agent/tools/ToolRegistry';
 import { ToolExecutor } from '../agent/tools/ToolExecutor';
 import { AgentLoop, AgentLoopCallbacks } from '../agent/runtime/AgentLoop';
 import { PermissionMode } from '../agent/config';
+import { PermissionGate } from '../agent/permission/PermissionGate';
 
 const router = Router();
 
 /** 存储活动的 AgentLoop 实例（用于中断） */
 const activeLoops = new Map<string, AgentLoop>();
+
+/** 存储活动的权限网关实例（用于权限决策回传） */
+const activeGates = new Map<string, PermissionGate>();
 
 /**
  * 将内部 ChatMessage 转换为 LLM 消息格式
@@ -32,15 +41,24 @@ function convertMessagesToLLMFormat(messages: ChatMessage[]): LLMMessage[] {
 const AGENT_SYSTEM_PROMPT = `你是一个能力强大的 AI 助手，可以使用以下工具帮助用户完成任务。
 
 可用工具：
-- list_files: 列出目录内容，浏览项目结构
-- read_file: 读取文件内容
-- grep_search: 正则搜索文件内容
+- list_files: 列出目录内容，浏览项目结构（只读）
+- read_file: 读取文件内容（只读）
+- grep_search: 正则搜索文件内容（只读）
+- write_file: 将完整内容写入文件，覆盖已有内容或创建新文件（编辑，需用户授权）
+- edit_file: 通过旧字符串替换为新字符串，局部编辑文件（编辑，需用户授权）
 
 使用原则：
-1. 当用户询问项目结构、文件内容、代码位置时，主动调用工具获取信息，不要凭空猜测
-2. 工具调用后，基于真实结果给出回答
-3. 普通对话问题（如知识问答、文本生成）直接回答，无需调用工具
-4. 工具调用失败时，告知用户失败原因，不要编造结果`;
+1. 当用户询问项目结构、文件内容、代码位置时，主动调用只读工具获取信息，不要凭空猜测
+2. 当用户要求创建、修改文件时，使用 write_file 或 edit_file。这些操作会触发用户授权确认，被拒绝时应告知用户并停止
+3. 工具调用后，基于真实结果给出回答
+4. 普通对话问题（如知识问答、文本生成）直接回答，无需调用工具
+5. 工具调用失败时，告知用户失败原因，不要编造结果
+6. edit_file 的 oldString 必须能唯一匹配文件内容，提供足够长的上下文避免歧义
+
+路径确认规则（重要）：
+- 当用户指定的路径不存在时（如 list_files / read_file 返回"目录不存在"或"文件不存在"），必须先向用户确认正确路径，禁止自行假设路径并直接调用 write_file / edit_file
+- 例如：用户说"在 src 下创建文件"但 src 目录不存在，你应该先问"根目录下没有 src 目录，你是指 client/src/ 还是 server/src/？"，而不是直接在根目录创建文件
+- 不确定用户意图时，宁可多问一句，也不要猜测路径并执行写入操作`;
 
 /**
  * SSE响应初始化
@@ -97,8 +115,8 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
 
     console.log(`[SSE] ${new Date().toISOString()} 开始流: requestId=${requestId}`);
 
-    // 发送消息开始事件
-    writeSSEEvent(res, 'message_start', { messageId: assistantMessageId });
+    // 发送消息开始事件（携带 requestId，前端回传权限决策时需要）
+    writeSSEEvent(res, 'message_start', { messageId: assistantMessageId, requestId });
 
     // 装配 Agent 组件
     // 工具工作目录指向项目根目录（server/ 的上一级），确保能访问完整项目结构
@@ -106,15 +124,46 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
     const llmClient = createLLMClient();
     const registry = createDefaultRegistry();
     const executor = new ToolExecutor(registry, projectRoot);
+
+    // 权限网关：onPending 在挂起前同步触发，发 SSE permission_request 到前端
+    const permissionGate = new PermissionGate({
+      timeoutMs: 120000,
+      onPending: (reqPayload) => {
+        const ssePayload: SSEPermissionRequest = {
+          ...reqPayload,
+          requestId,
+        };
+        console.log(`[SSE] 推送 permission_request: ${reqPayload.toolName} permissionId=${reqPayload.permissionId}`);
+        writeSSEEvent(res, 'permission_request', ssePayload);
+      },
+    });
+
     const agentLoop = new AgentLoop(llmClient, registry, executor, {
       cwd: projectRoot,
       maxRounds: 8,
-      permission: PermissionMode.BypassPermissions, // 当前阶段只读工具直接放行
+      // Default 模式：编辑类工具触发权限确认弹窗
+      // （只读工具在 executor 中不触发权限检查，自动放行）
+      permission: PermissionMode.Default,
       model,
       temperature,
       maxTokens,
-    });
+    }, permissionGate);
     activeLoops.set(requestId, agentLoop);
+    activeGates.set(requestId, permissionGate);
+
+    // SSE 连接断开清理（幂等）：用户关页面 / 网络中断时
+    // 必须拒绝所有 pending 权限请求并中止 AgentLoop，防止内存泄漏与烧 token
+    let cleaned = false;
+    const cleanup = (): void => {
+      if (cleaned) return;
+      cleaned = true;
+      permissionGate.cancelAll('SSE 连接已关闭');
+      agentLoop.abort();
+      activeLoops.delete(requestId);
+      activeGates.delete(requestId);
+      console.log(`[SSE] 清理完成: requestId=${requestId}`);
+    };
+    res.on('close', cleanup);
 
     // 转换消息格式
     const llmMessages = convertMessagesToLLMFormat(messages);
@@ -142,6 +191,10 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
           durationMs: result.durationMs,
         });
       },
+      onPermissionRequest: (reqPayload) => {
+        // 备用钩子：实际 SSE 由 gate.onPending 发出，此处仅打日志
+        console.log(`[AgentLoop] 权限请求通知: ${reqPayload.toolName}`);
+      },
       onDone: (info) => {
         console.log(`[SSE] ${new Date().toISOString()} 流结束: requestId=${requestId} 耗时=${Date.now() - streamStartTs}ms 轮次=${info.iterations}`);
         writeSSEEvent(res, 'message_end', {
@@ -151,7 +204,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
         });
         writeSSEEvent(res, 'done', { conversationId: requestId });
         res.end();
-        activeLoops.delete(requestId);
+        cleanup();
       },
       onError: (error: Error) => {
         console.error('[SSE] AgentLoop 错误:', error.message);
@@ -160,7 +213,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
           message: error.message || 'AI 服务暂时不可用',
         });
         res.end();
-        activeLoops.delete(requestId);
+        cleanup();
       },
     };
 
@@ -195,12 +248,54 @@ router.post('/chat/abort', (req: Request, res: Response) => {
     return;
   }
   const loop = activeLoops.get(requestId);
+  const gate = activeGates.get(requestId);
   if (loop) {
+    // 中断时同时拒绝所有 pending 权限请求
+    gate?.cancelAll('用户主动中断');
     loop.abort();
     activeLoops.delete(requestId);
+    activeGates.delete(requestId);
     res.json({ success: true, message: '请求已中断' });
   } else {
     res.json({ success: false, message: '未找到活动的请求' });
+  }
+});
+
+/**
+ * POST /api/chat/permission
+ * 权限决策回传接口（前端弹窗用户点击同意/拒绝后调用）
+ *
+ * 请求体：{ requestId, permissionId, approved, reason? }
+ * 响应：{ success: true } 成功唤醒；{ success: false, reason } 已决或不存在
+ */
+router.post('/chat/permission', (req: Request, res: Response) => {
+  const { requestId, permissionId, approved, reason } = req.body as PermissionResponseBody;
+  if (!requestId || !permissionId) {
+    res.status(400).json({
+      code: 400,
+      message: '参数错误',
+      detail: 'requestId 和 permissionId 不能为空',
+    });
+    return;
+  }
+
+  const gate = activeGates.get(requestId);
+  if (!gate) {
+    res.json({ success: false, reason: 'session-not-found' });
+    return;
+  }
+
+  // 幂等：已决或不存在的 permissionId 返回 false
+  const ok = gate.resolve(permissionId, {
+    approved: !!approved,
+    reason: reason || (approved ? '' : '用户拒绝'),
+  });
+  console.log(`[Permission] 决策回传: requestId=${requestId} permissionId=${permissionId} approved=${approved} ok=${ok}`);
+
+  if (ok) {
+    res.json({ success: true });
+  } else {
+    res.json({ success: false, reason: 'already-resolved-or-not-found' });
   }
 });
 
@@ -212,6 +307,7 @@ router.get('/health', (_req: Request, res: Response) => {
     status: 'ok',
     timestamp: new Date().toISOString(),
     activeRequests: activeLoops.size,
+    pendingPermissions: activeGates.size,
   });
 });
 
