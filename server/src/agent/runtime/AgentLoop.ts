@@ -28,8 +28,9 @@ import {
   OpenAIToolFunction,
   PermissionChecker,
 } from '../tools/ToolProtocol';
-import { PermissionMode } from '../config';
+import { PermissionMode, ContextWindowConfig, DEFAULT_CONTEXT_WINDOW } from '../config';
 import { PermissionGate, PermissionRequestPayload } from '../permission/PermissionGate';
+import { ContextManager, TrimInfo } from '../context/ContextManager';
 
 /**
  * AgentLoop 回调接口
@@ -44,6 +45,8 @@ export interface AgentLoopCallbacks {
   onToolResult: (result: ToolExecutionResult) => void;
   /** 权限请求（编辑类工具执行前触发，前端弹出确认框） */
   onPermissionRequest?: (req: PermissionRequestPayload) => void;
+  /** 上下文裁剪事件（用于前端展示裁剪信息或日志） */
+  onContextTrim?: (info: TrimInfo) => void;
   /** 循环结束（正常完成或达到最大轮次） */
   onDone: (info: { iterations: number; finalAnswer: string; maxReached: boolean }) => void;
   /** 不可恢复错误 */
@@ -60,6 +63,8 @@ export interface AgentLoopConfig {
   maxRounds: number;
   /** 权限模式（当前阶段全部放行，预留扩展） */
   permission: PermissionMode;
+  /** 上下文窗口配置（token 限制与裁剪策略） */
+  contextWindow?: Partial<ContextWindowConfig>;
   /** 模型配置 */
   model?: string;
   temperature?: number;
@@ -76,6 +81,8 @@ export class AgentLoop {
   private abortController = new AbortController();
   /** 当前迭代轮次 */
   private iteration = 0;
+  /** 上下文管理器（token 估算与自动裁剪） */
+  private readonly contextManager: ContextManager;
 
   constructor(
     private readonly llmClient: LLMClient,
@@ -84,7 +91,18 @@ export class AgentLoop {
     private readonly config: AgentLoopConfig,
     /** 权限网关（处理 Edit 类工具的 Suspend/Resume，由 chat.ts 注入） */
     private readonly permissionGate?: PermissionGate
-  ) {}
+  ) {
+    // 初始化上下文管理器，使用配置的上下文窗口参数
+    const ctxConfig = {
+      ...DEFAULT_CONTEXT_WINDOW,
+      ...config.contextWindow,
+    };
+    this.contextManager = new ContextManager(ctxConfig);
+    console.log(
+      `[AgentLoop] ContextManager 配置: maxTokens=${ctxConfig.maxContextTokens}, ` +
+      `trimRatio=${ctxConfig.trimRatio}, perMsgOverhead=${ctxConfig.perMessageOverhead}`
+    );
+  }
 
   /**
    * 运行 Agent 主循环
@@ -113,6 +131,30 @@ export class AgentLoop {
       while (this.iteration < this.config.maxRounds) {
         this.iteration++;
         console.log(`[AgentLoop] === 第 ${this.iteration}/${this.config.maxRounds} 轮 ===`);
+
+        // 0. 上下文裁剪（每轮 LLM 调用前检查并裁剪）
+        const estimatedTokens = this.contextManager.estimateTotalTokens(this.messages);
+        console.log(
+          `[AgentLoop] 上下文状态: ${this.messages.length} 条消息, 约 ${Math.round(estimatedTokens)} tokens`
+        );
+
+        if (this.contextManager.shouldTrim(this.messages)) {
+          console.log('[AgentLoop] 上下文接近阈值，执行裁剪...');
+          const { trimmed, info } = this.contextManager.trimMessages(this.messages);
+
+          // 更新内部消息列表为裁剪后的版本
+          this.messages = trimmed;
+
+          // 打印裁剪详情
+          console.log(
+            `[AgentLoop] 上下文裁剪: ${info.beforeMessageCount}→${info.afterMessageCount} 条, ` +
+            `${Math.round(info.beforeEstimatedTokens)}→${Math.round(info.afterEstimatedTokens)} tokens, ` +
+            `移除 ${info.trimmedCount} 条消息`
+          );
+
+          // 触发裁剪事件回调（通知前端/日志）
+          callbacks.onContextTrim?.(info);
+        }
 
         // 1. 调用 LLM
         const loopResult = await this.callLLM(this.messages, openaiTools, callbacks);

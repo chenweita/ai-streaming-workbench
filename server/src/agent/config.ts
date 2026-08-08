@@ -56,6 +56,18 @@ const DEFAULT_MAX_COST_USD = 1.0;
 /** 默认单轮最大 token */
 const DEFAULT_MAX_TOKENS_PER_ROUND = 4096;
 
+/**
+ * 默认最大上下文 token 数（模型窗口上限预留空间）
+ * 按常见 128K 窗口预留 32K 给输出，剩余 96K 作为输入上限
+ */
+const DEFAULT_MAX_CONTEXT_TOKENS = 96000;
+
+/**
+ * 裁剪安全系数：当上下文逼近阈值时，提前裁剪避免超限
+ * 例如阈值 96000 * 0.8 = 76800 token 时触发裁剪
+ */
+const DEFAULT_CONTEXT_TRIM_RATIO = 0.8;
+
 /* -------------------------------------------------------------------------- */
 /*                               权限模式枚举                                   */
 /* -------------------------------------------------------------------------- */
@@ -108,6 +120,23 @@ export interface BudgetConfig {
   maxTokensPerRound: number;
 }
 
+/** 上下文窗口配置（会话短期记忆管控） */
+export interface ContextWindowConfig {
+  /** 最大上下文 token 数（输入上限） */
+  maxContextTokens: number;
+  /** 裁剪触发比率：当 token 数达到 max * ratio 时裁剪 */
+  trimRatio: number;
+  /** 每条消息的估算开销（role + metadata 等，单位 token） */
+  perMessageOverhead: number;
+}
+
+/** 默认上下文窗口配置常量 */
+export const DEFAULT_CONTEXT_WINDOW: Readonly<ContextWindowConfig> = Object.freeze({
+  maxContextTokens: DEFAULT_MAX_CONTEXT_TOKENS,
+  trimRatio: DEFAULT_CONTEXT_TRIM_RATIO,
+  perMessageOverhead: 4,
+});
+
 /** 项目运行环境配置 */
 export interface ProjectConfig {
   /** Agent 工作目录（工具执行的相对路径基准） */
@@ -126,6 +155,8 @@ export interface AgentConfig {
   permission: PermissionMode;
   /** 预算约束 */
   budget: BudgetConfig;
+  /** 上下文窗口配置 */
+  contextWindow: ContextWindowConfig;
   /** 项目环境 */
   project: ProjectConfig;
   /** 调试模式：输出详细日志 */
@@ -140,6 +171,7 @@ export interface ConfigOverrides {
   model?: Partial<ModelConfig>;
   permission?: PermissionMode;
   budget?: Partial<BudgetConfig>;
+  contextWindow?: Partial<ContextWindowConfig>;
   project?: Partial<ProjectConfig>;
   debug?: boolean;
 }
@@ -229,6 +261,17 @@ function loadFromEnv(): AgentConfig {
         DEFAULT_MAX_TOKENS_PER_ROUND
       ),
     },
+    contextWindow: {
+      maxContextTokens: parseNumber(
+        process.env.AGENT_MAX_CONTEXT_TOKENS,
+        DEFAULT_MAX_CONTEXT_TOKENS
+      ),
+      trimRatio: parseNumber(
+        process.env.AGENT_CONTEXT_TRIM_RATIO,
+        DEFAULT_CONTEXT_TRIM_RATIO
+      ),
+      perMessageOverhead: DEFAULT_CONTEXT_WINDOW.perMessageOverhead,
+    },
     project: {
       cwd,
       projectRoot,
@@ -255,6 +298,7 @@ function mergeConfig(
     model: { ...base.model, ...overrides.model },
     permission: overrides.permission ?? base.permission,
     budget: { ...base.budget, ...overrides.budget },
+    contextWindow: { ...base.contextWindow, ...overrides.contextWindow },
     project: { ...base.project, ...overrides.project },
     debug: overrides.debug ?? base.debug,
   };
@@ -343,6 +387,7 @@ export const DEFAULT_CONFIG: Readonly<AgentConfig> = Object.freeze({
     maxCostUsd: DEFAULT_MAX_COST_USD,
     maxTokensPerRound: DEFAULT_MAX_TOKENS_PER_ROUND,
   },
+  contextWindow: { ...DEFAULT_CONTEXT_WINDOW },
   project: {
     cwd: process.cwd(),
     projectRoot: process.cwd(),
