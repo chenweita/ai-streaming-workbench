@@ -137,6 +137,23 @@ export const DEFAULT_CONTEXT_WINDOW: Readonly<ContextWindowConfig> = Object.free
   perMessageOverhead: 4,
 });
 
+/** 长期记忆配置 */
+export interface MemoryConfig {
+  /** 全局记忆最大 token 数 */
+  globalMaxTokens: number;
+  /** 项目记忆最大 token 数 */
+  projectMaxTokens: number;
+  /** 是否启用长期记忆 */
+  enabled: boolean;
+}
+
+/** 默认记忆配置常量 */
+export const DEFAULT_MEMORY_CONFIG: Readonly<MemoryConfig> = Object.freeze({
+  globalMaxTokens: 1000,
+  projectMaxTokens: 1000,
+  enabled: true,
+});
+
 /** 项目运行环境配置 */
 export interface ProjectConfig {
   /** Agent 工作目录（工具执行的相对路径基准） */
@@ -157,6 +174,8 @@ export interface AgentConfig {
   budget: BudgetConfig;
   /** 上下文窗口配置 */
   contextWindow: ContextWindowConfig;
+  /** 长期记忆配置 */
+  memory: MemoryConfig;
   /** 项目环境 */
   project: ProjectConfig;
   /** 调试模式：输出详细日志 */
@@ -172,6 +191,7 @@ export interface ConfigOverrides {
   permission?: PermissionMode;
   budget?: Partial<BudgetConfig>;
   contextWindow?: Partial<ContextWindowConfig>;
+  memory?: Partial<MemoryConfig>;
   project?: Partial<ProjectConfig>;
   debug?: boolean;
 }
@@ -272,6 +292,17 @@ function loadFromEnv(): AgentConfig {
       ),
       perMessageOverhead: DEFAULT_CONTEXT_WINDOW.perMessageOverhead,
     },
+    memory: {
+      globalMaxTokens: parseNumber(
+        process.env.AGENT_MEMORY_GLOBAL_TOKENS,
+        DEFAULT_MEMORY_CONFIG.globalMaxTokens
+      ),
+      projectMaxTokens: parseNumber(
+        process.env.AGENT_MEMORY_PROJECT_TOKENS,
+        DEFAULT_MEMORY_CONFIG.projectMaxTokens
+      ),
+      enabled: (process.env.AGENT_MEMORY_ENABLED ?? 'true').toLowerCase() === 'true',
+    },
     project: {
       cwd,
       projectRoot,
@@ -299,6 +330,7 @@ function mergeConfig(
     permission: overrides.permission ?? base.permission,
     budget: { ...base.budget, ...overrides.budget },
     contextWindow: { ...base.contextWindow, ...overrides.contextWindow },
+    memory: { ...base.memory, ...overrides.memory },
     project: { ...base.project, ...overrides.project },
     debug: overrides.debug ?? base.debug,
   };
@@ -388,6 +420,7 @@ export const DEFAULT_CONFIG: Readonly<AgentConfig> = Object.freeze({
     maxTokensPerRound: DEFAULT_MAX_TOKENS_PER_ROUND,
   },
   contextWindow: { ...DEFAULT_CONTEXT_WINDOW },
+  memory: { ...DEFAULT_MEMORY_CONFIG },
   project: {
     cwd: process.cwd(),
     projectRoot: process.cwd(),
