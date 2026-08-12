@@ -32,8 +32,12 @@ import { createCreateSkillTool } from './builtin/createSkill.tool';
 import { createListSkillsTool } from './builtin/listSkills.tool';
 import { createExecuteSkillTool } from './builtin/executeSkill.tool';
 import { createEvolveSkillTool } from './builtin/evolveSkill.tool';
+import { createSpawnSubAgentTool } from './builtin/spawnSubAgent.tool';
+import { createListAuditLogTool } from './builtin/listAuditLog.tool';
 import { CompositeMemoryStore } from '../memory/CompositeMemoryStore';
 import { SkillStore } from '../skill/SkillStore';
+import { SubAgentRunner } from '../subagent/SubAgentRunner';
+import { AuditLog } from '../audit/AuditLog';
 
 /**
  * 注册表内部存储的工具契约类型
@@ -132,10 +136,14 @@ export class ToolRegistry {
  * 创建默认工具注册表（预装内置工具）
  * @param memoryStore 组合记忆存储实例（可选，用于创建记忆工具）
  * @param skillStore 技能存储实例（可选，用于创建技能工具）
+ * @param subAgentRunner 子 Agent 调度器（可选，用于创建子 Agent 工具）
+ * @param auditLog 审计日志实例（可选，用于创建审计工具）
  */
 export function createDefaultRegistry(
   memoryStore?: CompositeMemoryStore,
-  skillStore?: SkillStore
+  skillStore?: SkillStore,
+  subAgentRunner?: SubAgentRunner,
+  auditLog?: AuditLog
 ): ToolRegistry {
   const registry = new ToolRegistry();
   // 具体工具的 TParams 为具体接口，注册表统一存储为 Record<string, unknown>
@@ -163,6 +171,20 @@ export function createDefaultRegistry(
       createListSkillsTool(skillStore) as unknown as ToolDef<Record<string, unknown>, string>,
       createExecuteSkillTool(skillStore) as unknown as ToolDef<Record<string, unknown>, string>,
       createEvolveSkillTool(skillStore) as unknown as ToolDef<Record<string, unknown>, string>
+    );
+  }
+
+  // 如果注入了子 Agent 调度器，注册子 Agent 工具
+  if (subAgentRunner) {
+    tools.push(
+      createSpawnSubAgentTool(subAgentRunner) as unknown as ToolDef<Record<string, unknown>, string>
+    );
+  }
+
+  // 如果注入了审计日志，注册审计查询工具
+  if (auditLog) {
+    tools.push(
+      createListAuditLogTool(auditLog) as unknown as ToolDef<Record<string, unknown>, string>
     );
   }
 

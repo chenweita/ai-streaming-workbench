@@ -15,6 +15,8 @@ import { PermissionGate } from '../agent/permission/PermissionGate';
 import { MemoryStore } from '../agent/memory/MemoryStore';
 import { CompositeMemoryStore } from '../agent/memory/CompositeMemoryStore';
 import { SkillStore } from '../agent/skill/SkillStore';
+import { AuditLog } from '../agent/audit/AuditLog';
+import { SubAgentRunner } from '../agent/subagent/SubAgentRunner';
 
 const router = Router();
 
@@ -55,6 +57,8 @@ const AGENT_SYSTEM_PROMPT = `你是一个能力强大的 AI 助手，可以使�
 - list_skills: 列出所有已创建的技能（只读）
 - execute_skill: 执行已创建的技能（编辑，需用户授权）
 - evolve_skill: 技能进化，生成新版本并记录变更历史（编辑，需用户授权）
+- spawn_sub_agent: 派生多个子 Agent 并行执行任务，适合拆分复杂任务（编辑，需用户授权）
+- list_audit_log: 查询历史操作审计日志，可按条件过滤（只读）
 
 使用原则：
 1. 当用户询问项目结构、文件内容、代码位置时，主动调用只读工具获取信息，不要凭空猜测
@@ -64,17 +68,19 @@ const AGENT_SYSTEM_PROMPT = `你是一个能力强大的 AI 助手，可以使�
 5. 当用户要求创建可复用的代码逻辑、自动化流程时，使用 create_skill 创建技能
 6. 当用户要求执行某个已创建的技能时，使用 execute_skill
 7. 当用户要求优化某个技能时，使用 evolve_skill 生成新版本
-8. 工具调用后，基于真实结果给出回答
-9. 普通对话问题（如知识问答、文本生成）直接回答，无需调用工具
-10. 工具调用失败时，告知用户失败原因，不要编造结果
-11. edit_file 的 oldString 必须能唯一匹配文件内容，提供足够长的上下文避免歧义
+8. 当用户要求查询历史操作、审计记录时，使用 list_audit_log
+9. 当面对复杂任务（如同时分析多个文件、并行处理多个模块）时，使用 spawn_sub_agent 派生多个子 Agent 并行执行
+10. 工具调用后，基于真实结果给出回答
+11. 普通对话问题（如知识问答、文本生成）直接回答，无需调用工具
+12. 工具调用失败时，告知用户失败原因，不要编造结果
+13. edit_file 的 oldString 必须能唯一匹配文件内容，提供足够长的上下文避免歧义
 
 ⚠️ 重要：关于用户拒绝授权
 - 如果用户拒绝了 save_memory 或 delete_memory 的授权，你必须：
   1. 立即停止调用任何记忆相关工具，不要重试
   2. 告知用户"已取消记忆操作，本次不会保存相关信息"
   3. 可以继续回答用户的其他问题，但不要再尝试记忆操作
-- 同样的规则适用于 write_file / edit_file / create_skill / execute_skill / evolve_skill 等所有被拒绝的编辑工具
+- 同样的规则适用于 write_file / edit_file / create_skill / execute_skill / evolve_skill / spawn_sub_agent 等所有被拒绝的编辑工具
 
 路径确认规则（重要）：
 - 当用户指定的路径不存在时（如 list_files / read_file 返回"目录不存在"或"文件不存在"），必须先向用户确认正确路径，禁止自行假设路径并直接调用 write_file / edit_file
@@ -168,6 +174,18 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
     const skillStore = new SkillStore();
     console.log(`[Chat] 技能存储: 已有 ${skillStore.size()} 个技能`);
 
+    // 初始化审计日志：~/.trae-cn/audit/audit.log
+    const auditLog = new AuditLog();
+    console.log(`[Chat] 审计日志已就绪`);
+
+    // 初始化子 Agent 调度器
+    const subAgentRunner = new SubAgentRunner({
+      defaultTimeoutMs: 60000,
+      maxParallel: 3,
+      auditLog,
+    });
+    console.log(`[Chat] 子 Agent 调度器已就绪`);
+
     // 合并记忆摘要注入系统提示词
     const globalSummary = globalMemoryStore.buildMemorySummary();
     const projectSummary = projectMemoryStore.buildMemorySummary();
@@ -177,7 +195,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       : AGENT_SYSTEM_PROMPT;
 
     const llmClient = createLLMClient();
-    const registry = createDefaultRegistry(compositeMemory, skillStore);
+    const registry = createDefaultRegistry(compositeMemory, skillStore, subAgentRunner, auditLog);
     const executor = new ToolExecutor(registry, projectRoot);
 
     // 权限网关：onPending 在挂起前同步触发，发 SSE permission_request 到前端
@@ -202,7 +220,7 @@ router.post('/chat/stream', async (req: Request, res: Response) => {
       model,
       temperature,
       maxTokens,
-    }, permissionGate);
+    }, permissionGate, auditLog);
     activeLoops.set(requestId, agentLoop);
     activeGates.set(requestId, permissionGate);
 

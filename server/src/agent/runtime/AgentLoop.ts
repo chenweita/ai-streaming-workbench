@@ -31,6 +31,7 @@ import {
 import { PermissionMode, ContextWindowConfig, DEFAULT_CONTEXT_WINDOW } from '../config';
 import { PermissionGate, PermissionRequestPayload } from '../permission/PermissionGate';
 import { ContextManager, TrimInfo } from '../context/ContextManager';
+import { AuditLog } from '../audit/AuditLog';
 
 /**
  * AgentLoop 回调接口
@@ -83,6 +84,10 @@ export class AgentLoop {
   private iteration = 0;
   /** 上下文管理器（token 估算与自动裁剪） */
   private readonly contextManager: ContextManager;
+  /** 审计日志（可选，注入后自动记录关键操作） */
+  private readonly auditLog?: AuditLog;
+  /** Agent 实例 ID（用于审计追踪） */
+  private readonly agentId: string;
 
   constructor(
     private readonly llmClient: LLMClient,
@@ -90,8 +95,13 @@ export class AgentLoop {
     private readonly executor: ToolExecutor,
     private readonly config: AgentLoopConfig,
     /** 权限网关（处理 Edit 类工具的 Suspend/Resume，由 chat.ts 注入） */
-    private readonly permissionGate?: PermissionGate
+    private readonly permissionGate?: PermissionGate,
+    /** 审计日志实例 */
+    auditLog?: AuditLog
   ) {
+    this.auditLog = auditLog;
+    this.agentId = `agent_${Date.now()}_${Math.random().toString(36).substring(2, 8)}`;
+
     // 初始化上下文管理器，使用配置的上下文窗口参数
     const ctxConfig = {
       ...DEFAULT_CONTEXT_WINDOW,
@@ -154,6 +164,17 @@ export class AgentLoop {
 
           // 触发裁剪事件回调（通知前端/日志）
           callbacks.onContextTrim?.(info);
+
+          // 写入审计日志
+          if (this.auditLog) {
+            this.auditLog.logContextTrim(
+              this.agentId,
+              info.beforeMessageCount,
+              info.afterMessageCount,
+              info.beforeEstimatedTokens,
+              info.afterEstimatedTokens
+            );
+          }
         }
 
         // 1. 调用 LLM
@@ -332,6 +353,21 @@ export class AgentLoop {
     for (const result of results) {
       console.log(`[AgentLoop] 工具 ${result.toolName} 完成: ok=${result.ok}, 耗时=${result.durationMs}ms`);
       callbacks.onToolResult(result);
+
+      // 写入审计日志
+      if (this.auditLog) {
+        this.auditLog.logToolCall(
+          this.agentId,
+          result.toolName,
+          `工具调用 ${result.toolCallId}${result.ok ? '' : ' (失败)'}`,
+          result.ok ? 'success' : 'failed',
+          {
+            toolCallId: result.toolCallId,
+            resultLength: result.content.length,
+            durationMs: result.durationMs,
+          }
+        );
+      }
 
       // 回填 tool 角色消息到对话上下文
       this.messages.push({
